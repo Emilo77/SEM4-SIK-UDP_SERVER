@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <unistd.h>
 #include <cmath>
+#include <ctime>
 
 #include <map>
 #include <sys/stat.h>
@@ -32,7 +33,6 @@ using std::string;
 #define ONE_OCTET
 #define TICKET_OCTETS 7
 
-
 #define DEFAULT_PORT 2022
 #define DEFAULT_TIMEOUT 5
 
@@ -43,6 +43,8 @@ using std::string;
 
 #define BUFFER_SIZE 65507
 char shared_buffer[BUFFER_SIZE];
+int reservation_current_id = 0;
+
 
 #define PRINT_ERRNO()                                                  \
     do {                                                               \
@@ -52,7 +54,6 @@ char shared_buffer[BUFFER_SIZE];
             exit(EXIT_FAILURE);                                        \
         }                                                              \
     } while (0)
-
 
 // Set `errno` to 0 and evaluate `x`. If `errno` changed, describe it and exit.
 #define CHECK_ERRNO(x)                                                             \
@@ -70,15 +71,6 @@ char shared_buffer[BUFFER_SIZE];
                 #x, __func__, __FILE__, __LINE__);                        \
             exit(EXIT_FAILURE);                                           \
         }                                                                 \
-    } while (0)
-
-#define PRINT_ERRNO()                                                  \
-    do {                                                               \
-        if (errno != 0) {                                              \
-            fprintf(stderr, "Error: errno %d in %s at %s:%d\n%s\n",    \
-              errno, __func__, __FILE__, __LINE__, strerror(errno));   \
-            exit(EXIT_FAILURE);                                        \
-        }                                                              \
     } while (0)
 
 
@@ -124,8 +116,8 @@ read_message(int socket_fd, struct sockaddr_in *client_address, char *buffer,
 	return (size_t) len;
 }
 
-struct event {
-	char description[MAX_DESCRIPTION_SIZE];
+struct event_struct {
+	char description[MAX_DESCRIPTION_SIZE]; //można zamienić na vector
 	int description_length;
 	int tickets_available;
 } event;
@@ -134,11 +126,16 @@ struct reservation {
 	int event_id;
 	int ticket_count;
 	std::vector<char> cookie;
-	size_t expiration_time;
+	time_t expiration_time;
+	bool achieved{false};
 } reservation;
 
+int new_reservation_id() {
+	return reservation_current_id++;
+}
+
 void exit_program(int status) {
-	std::string message;
+	string message;
 	switch (status) {
 		case WRONG_PARAMETERS:
 			message = "WRONG SERVER PARAMETERS";
@@ -225,30 +222,16 @@ void check_parameters(int argc, char *argv[], int *port_ptr, int *timeout_ptr,
 
 }
 
-int parse_id_from_buffer() {
-	int event_id_arr[4];
+int parse_number_from_buffer(int index, int size) { //sprawdzić
+	int arr[size];
 	int result = 0;
 
-	for (int i = 1; i < 5; i++) {
-		event_id_arr[4 - i] = (int) (unsigned char) shared_buffer[i];
+	for (int i = 0; i < size; i++) {
+		arr[size - 1 - i] = (int) (unsigned char) shared_buffer[index + i];
 	}
-	for (int i = 0; i < 4; i++) {
-		result += event_id_arr[i] * (int) pow(256, i);
+	for (int i = 0; i < size; i++) {
+		result += arr[i] * (int) pow(256, i);
 	}
-	return result;
-}
-
-int parse_ticket_count_from_buffer() {
-	int ticket_count_arr[2];
-	int result = 0;
-
-	ticket_count_arr[0] = (int) (unsigned char) shared_buffer[6];
-	ticket_count_arr[1] = (int) (unsigned char) shared_buffer[5];
-
-	for (int i = 0; i < 2; i++) {
-		result += ticket_count_arr[i] * (int) pow(256, i);
-	}
-
 	return result;
 }
 
@@ -261,11 +244,11 @@ std::vector<char> parse_cookie_from_buffer() {
 	return cookie;
 }
 
-int event_size_in_buffer(struct event e) {
+int event_size_in_buffer(event_struct e) {
 	return e.description_length + CONST_OCTETS;
 }
 
-std::vector<int> numbers_to_binary(int number, int octet_size) {
+std::vector<int> numbers_to_binary(size_t number, int octet_size) {
 	std::vector<int> result(octet_size, 0);
 	for (int i = octet_size - 1; i >= 0; i--) {
 		result[i] = number % COUNTING_BASE;
@@ -275,19 +258,16 @@ std::vector<int> numbers_to_binary(int number, int octet_size) {
 }
 
 bool check_reservation(int event_id, int ticket_count,
-                       std::map<int, struct event> &events_map,
+                       std::map<int, event_struct> &events_map,
                        std::map<int, struct reservation> &reservations_map) {
 
 	if (reservations_map.find(event_id) == reservations_map.end())
 		return false;
-
 	if (ticket_count == 0)
 		return false;
-
 	if (events_map.at(event_id).tickets_available < ticket_count)
 		return false;
-
-	if (CONST_OCTETS + ticket_count * TICKET_OCTETS > BUFFER_SIZE)
+	if (9 + ticket_count * TICKET_OCTETS > BUFFER_SIZE)
 		return false;   //sytuacja przepełnienia bufora
 
 	return true;
@@ -298,59 +278,91 @@ std::vector<char> generate_cookie() { //todo!
 	return cookie;
 }
 
-void make_reservation_fill_buffer(int event_id, int ticket_count,
-                                  std::map<int, struct event> &events_map,
-                                  std::map<int, struct reservation> &reservations_map) {
+template<typename T>
+void move_to_buff(std::vector<T> vec, int *index) {
+	for (int i = 0; i < vec.size(); i++) {
+		shared_buffer[*index + i] = (char) vec[i];
+	}
+	*index += (int) vec.size();
+}
 
+void insert_bad_request_to_buffer(int id) {
 	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
+	shared_buffer[0] = (char) BAD_REQUEST;
+	int index = 1;
+
+	std::vector<int> id_bin = numbers_to_binary(id, 4);
+	move_to_buff(id_bin, &index);
+}
+
+void insert_reservation_to_buffer(struct reservation &r, int reservation_id) {
+	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
+	shared_buffer[0] = (char) RESERVATION;
+	int index = 1;
+
+	std::vector<int> reservation_id_bin = numbers_to_binary(reservation_id, 4);
+	std::vector<int> event_id_bin = numbers_to_binary(r.event_id, 4);
+	std::vector<int> ticket_count_bin = numbers_to_binary(r.ticket_count, 2);
+	std::vector<int> expiration_time_bin = numbers_to_binary(r.expiration_time,
+	                                                         8);
+
+	move_to_buff(reservation_id_bin, &index);
+	move_to_buff(event_id_bin, &index);
+	move_to_buff(ticket_count_bin, &index);
+	move_to_buff(r.cookie, &index);
+	move_to_buff(expiration_time_bin, &index);
+}
+
+void make_reservation(int event_id, int ticket_count, time_t expiration_time,
+                      std::map<int, event_struct> &events_map,
+                      std::map<int, struct reservation> &reservations_map) {
+
 
 	if (check_reservation(event_id, ticket_count, events_map,
 	                      reservations_map)) {
 
+		int reservation_id = new_reservation_id();
+
 		struct reservation new_reservation;
 		new_reservation.event_id = event_id;
 		new_reservation.ticket_count = ticket_count;
-		new_reservation.expiration_time = 0; //todo!
+		new_reservation.expiration_time = expiration_time;
 		new_reservation.cookie = generate_cookie(); //todo!
+		new_reservation.achieved = false;
+
+		reservations_map.insert({reservation_id, new_reservation});
+		events_map.at(event_id).tickets_available -= ticket_count;
+
+		insert_reservation_to_buffer(new_reservation, reservation_id);
 
 	} else {
-
+		insert_bad_request_to_buffer(event_id);
 	}
-
-
 }
 
-void insert_event_to_buffer(struct event eve, int event_id, int counter) {
+void insert_event_to_buffer(event_struct eve, int event_id, int counter) {
 	std::vector<int> event_id_bin = numbers_to_binary(event_id, 4);
 	std::vector<int> ticket_count_bin = numbers_to_binary(eve.tickets_available,
 	                                                      2);
 
-	for (int i = 0; i < 4; i++) {
-		shared_buffer[counter + i] = (char) event_id_bin[i];
-	}
-	counter += 4;
-	for (int i = 0; i < 2; i++) {
-		shared_buffer[counter + i] = (char) ticket_count_bin[i];
-	}
-	counter += 2;
+	move_to_buff(event_id_bin, &counter);
+	move_to_buff(ticket_count_bin, &counter);
 	shared_buffer[counter] = (char) eve.description_length;
 	counter++;
-
 	for (int i = 0; i < eve.description_length; i++) {
 		shared_buffer[counter + i] = (char) eve.description[i];
 	}
 }
 
 
-void fill_buffer_events(std::map<int, struct event> &events_map) {
-
+void fill_buffer_events(std::map<int, event_struct> &events_map) {
 	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
 	shared_buffer[0] = (char) EVENTS;
 	int counter = 1;
 
 	for (auto element: events_map) {
 		int event_id = element.first;
-		struct event eve = element.second;
+		event_struct eve = element.second;
 		int eve_size = event_size_in_buffer(eve);
 
 		if (counter + eve_size > BUFFER_SIZE) {
@@ -362,24 +374,45 @@ void fill_buffer_events(std::map<int, struct event> &events_map) {
 	}
 }
 
-void fill_buffer_tickets(int reservation_id, std::vector<char> &cookie) {
+bool check_tickets(int reservation_id, std::vector<char> &cookie,
+                   time_t current_time,
+                   std::map<int, struct reservation> &reservations_map) {
+	if (reservations_map.find(reservation_id) == reservations_map.end())
+		return false;
+	if (reservations_map.at(reservation_id).cookie != cookie)
+		return false;                                   //tu może nie działać
+	if (reservations_map.at(reservation_id).expiration_time < current_time)
+		return false;
+	return true;
+}
+
+void
+make_tickets(int reservation_id, std::vector<char> &cookie, time_t current_time,
+             std::map<int, struct reservation> &reservations_map) {
+
+	if (check_tickets(reservation_id, cookie, current_time, reservations_map)) {
+		reservations_map.at(reservation_id);
+
+	} else {
+		insert_bad_request_to_buffer(reservation_id);
+	}
 
 }
 
 void
-parse_from_file(char *file_path, std::map<int, struct event> &events_map) {
+parse_from_file(char *file_path, std::map<int, event_struct> &events_map) {
 	FILE *fp = fopen(file_path, "r+");
 	int event_id = 0;
 	char description[MAX_DESCRIPTION_SIZE];
 	char tickets_str[MAX_DESCRIPTION_SIZE];
-	int description_length = 0;
+	int description_length;
 
 	while (fgets(description, sizeof(description), fp)
 	       && fgets(tickets_str, sizeof(tickets_str), fp)) {
 
 		description_length = (int) strlen(description);
 
-		struct event new_event;
+		event_struct new_event;
 		strcpy(new_event.description, description);
 		new_event.description_length = description_length - 1;
 		new_event.tickets_available = (int) strtoul(tickets_str, nullptr,
@@ -392,7 +425,7 @@ parse_from_file(char *file_path, std::map<int, struct event> &events_map) {
 	fclose(fp);
 }
 
-void print_events(std::map<int, struct event> &events_map) {
+void print_events(std::map<int, event_struct> &events_map) {
 	for (auto element: events_map) {
 		printf("---------------------------------------\n");
 		printf("Event_id: %d\n", element.first);
@@ -410,6 +443,19 @@ void print_events(std::map<int, struct event> &events_map) {
 	}
 }
 
+void remove_expired_reservations(std::map<int, struct event_struct> &events_map,
+                                 std::map<int, struct reservation> &reservations_map,
+                                 time_t current_time) {
+	for (const auto &element: reservations_map) {
+		int r_id = element.first;
+		struct reservation r = element.second;
+		if (!r.achieved && r.expiration_time < current_time) {
+			events_map.at(r.event_id).tickets_available += r.ticket_count;
+			reservations_map.erase(r_id);
+		}
+	}
+}
+
 
 int main(int argc, char *argv[]) {
 
@@ -419,9 +465,8 @@ int main(int argc, char *argv[]) {
 
 	check_parameters(argc, argv, &port, &timeout, &file_index);
 
-
 	char *file_path = argv[file_index];
-	std::map<int, struct event> events_map;
+	std::map<int, struct event_struct> events_map;
 	std::map<int, struct reservation> reservations_map;
 
 	parse_from_file(file_path, events_map);
@@ -439,24 +484,31 @@ int main(int argc, char *argv[]) {
 		                           shared_buffer,
 		                           sizeof(shared_buffer));
 
-		char message_id = shared_buffer[0];
+
+		time_t current_time = time(nullptr);
+		remove_expired_reservations(events_map, reservations_map, current_time);
+
+		int message_id = (int) (unsigned char) shared_buffer[0];
 		switch (message_id) {
-			case '1': {
+			case GET_EVENTS: {
+//				print_events(events_map);
 				fill_buffer_events(events_map);
 				break;
 			}
-			case '3': {
-				int event_id = parse_id_from_buffer();
-				int ticket_count = parse_ticket_count_from_buffer();
+			case GET_RESERVATION: {
+				int event_id = parse_number_from_buffer(1, 4);
+				int ticket_count = parse_number_from_buffer(5, 2);
 
-				make_reservation_fill_buffer(event_id, ticket_count, events_map,
-				                             reservations_map);
+				make_reservation(event_id, ticket_count, current_time + timeout,
+				                 events_map, reservations_map);
 				break;
 			}
-			case '5': {
-				int reservation_id = parse_id_from_buffer();
+			case GET_TICKETS: {
+				int reservation_id = parse_number_from_buffer(1, 4);
 				std::vector<char> cookie = parse_cookie_from_buffer();
-				fill_buffer_tickets(reservation_id, cookie);
+
+				make_tickets(reservation_id, cookie, current_time,
+				             reservations_map);
 				break;
 			}
 			default: {
