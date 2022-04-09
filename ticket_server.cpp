@@ -1,4 +1,3 @@
-#include <iostream>
 #include <cstring>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -11,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <cassert>
+#include <string>
 
 using std::string;
 using std::vector;
@@ -35,7 +35,7 @@ using reservationMap = std::map<int, struct reservation>;
 
 #define CONST_OCTETS 7
 #define TICKET_OCTETS 7
-#define MAX_DESCRIPTION_SIZE 81
+#define MAX_DESCRIPTION_SIZE 80
 #define COOKIE_SIZE 48
 #define COUNTING_BASE 256
 
@@ -384,7 +384,6 @@ void insert_event_to_buffer(event &e, int event_id, int *index) {
 }
 
 void send_events(eventMap &events_map, int *message_length) {
-	//chyba nie musimy tu czyścić bufora, bo rozmiar wiadomości to 1 i tę komórkę nadpisujemy
 	int index = 0;
 	move_to_buff(EVENTS, 1, &index);
 
@@ -411,11 +410,6 @@ void fill_buffer_tickets(int reservation_id, const reservation &r,
 	for (const string &ticket: r.tickets) {
 		move_to_buff(ticket, index);
 	}
-
-//	for(int i = 0; i < 150; i++) {
-//		printf("[%d] %c\n", i, shared_buffer[i]);
-//	}
-//	printf("\n");
 }
 
 bool check_tickets(int reservation_id, string &cookie, time_t current_time,
@@ -455,39 +449,44 @@ void send_tickets_or_bad(time_t current_time, reservationMap &reservations_map,
 void parse_from_file(char *file_path, eventMap &events_map) {
 	FILE *fp = fopen(file_path, "r+");
 	int event_id = 0;
-	char description[MAX_DESCRIPTION_SIZE];
-	char tickets_str[MAX_DESCRIPTION_SIZE];
-	int description_length;
+	char description[MAX_DESCRIPTION_SIZE + 2];
+	char tickets_str[MAX_DESCRIPTION_SIZE + 2];
 
-	while (fgets(description, sizeof(description), fp)
-	       && fgets(tickets_str, sizeof(tickets_str), fp)) {
+	while (fgets(description, MAX_DESCRIPTION_SIZE + 2, fp)
+	       && fgets(tickets_str, MAX_DESCRIPTION_SIZE + 2, fp)) {
 
-		description_length = (int) strlen(description);
+
+		int description_length = (int) strlen(description) - 1;
 
 		event new_event{};
-		strcpy(new_event.description, description);
-		new_event.description_length = description_length - 1;
+		strncpy(new_event.description, description, MAX_DESCRIPTION_SIZE);
+		new_event.description_length = description_length;
 		new_event.tickets_available = (int) strtoul(tickets_str,
 		                                            nullptr, 10);
 
 		events_map.insert({event_id, new_event});
-
 		event_id++;
 	}
+
 	fclose(fp);
 }
 
 void remove_expired_reservations(eventMap &events_map,
                                  reservationMap &reservations_map,
-                                 time_t current_time) {
+                                 time_t &current_time) {
+	vector<int> reservations_to_remove;
 	for (const auto &element: reservations_map) {
 		int r_id = element.first;
 		reservation r = element.second;
-		if (!r.achieved && r.expiration_time < current_time) {
-//			assert(events_map.find(r.event_id) != events_map.end());
-			events_map.at(r.event_id).tickets_available += r.ticket_count;
-			reservations_map.erase(r_id);
+		if (!r.achieved && (r.expiration_time < current_time)) {
+			reservations_to_remove.push_back(r_id);
 		}
+	}
+	for (const auto &r_id: reservations_to_remove) {
+		assert(reservations_map.find(r_id) != reservations_map.end());
+		reservation r = reservations_map.at(r_id);
+		events_map.at(r.event_id).tickets_available += r.ticket_count;
+		reservations_map.erase(r_id);
 	}
 }
 
@@ -530,7 +529,6 @@ execute_command_send_message(int socket_fd,
 			printf("Cos jest nie tak\n");
 		}
 	}
-	printf("%d\n", reservation_current_id);
 	send_message(socket_fd, client_address, shared_buffer, *send_length);
 }
 
@@ -543,6 +541,7 @@ int main(int argc, char *argv[]) {
 
 	check_parameters(argc, argv, &port, &timeout, &file_index);
 
+
 	char *file_path = argv[file_index];
 	eventMap events_map;
 	reservationMap reservations_map;
@@ -550,7 +549,6 @@ int main(int argc, char *argv[]) {
 	parse_from_file(file_path, events_map);
 
 	printf("Listening on port %u\n", port);
-//	printf("%zu\n", events_map.size());
 
 	int socket_fd = bind_socket(port);
 	struct sockaddr_in client_address{};
@@ -558,6 +556,7 @@ int main(int argc, char *argv[]) {
 	size_t read_length;
 	bool is_valid;
 	int send_length;
+	time_t current_time;
 	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
 
 	do {
@@ -565,15 +564,16 @@ int main(int argc, char *argv[]) {
 		                           shared_buffer,
 		                           sizeof(shared_buffer));
 
-		time_t current_time = time(nullptr);
-//		remove_expired_reservations(events_map, reservations_map, current_time);
+
+		current_time = time(nullptr);
+		remove_expired_reservations(events_map, reservations_map, current_time);
 
 		is_valid = check_if_message_valid(read_length);
 		if (is_valid) {
 			execute_command_send_message(socket_fd, &client_address,
 			                             events_map, reservations_map,
 			                             current_time, timeout, &send_length);
-			memset(shared_buffer, 0, send_length); // clean the buffer
+			memset(shared_buffer, 0, send_length);
 		}
 
 	} while (read_length > 0);
