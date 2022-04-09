@@ -293,8 +293,8 @@ string generate_ticket() { //todo!
 	int length = 7;
 	string ticket(length, set[0]);
 
-	for (int i = COOKIE_SIZE - 1; i >= 0; i--) {
-		ticket[i] = (char) (set[ticket_id % strlen(set)]);
+	for (int i = 7 - 1; i >= 0; i--) {
+		ticket[i] = (set[ticket_id % strlen(set)]);
 		ticket_id /= (int) strlen(set);
 	}
 	return ticket;
@@ -419,6 +419,11 @@ void fill_buffer_tickets(int reservation_id, const struct reservation &r,
 	for (const string &ticket: r.tickets) {
 		move_to_buff(ticket, index);
 	}
+
+//	for(int i = 0; i < 150; i++) {
+//		printf("[%d] %c\n", i, shared_buffer[i]);
+//	}
+//	printf("\n");
 }
 
 bool check_tickets(int reservation_id, string &cookie,
@@ -441,31 +446,20 @@ void make_tickets(time_t current_time,
 	int reservation_id = parse_number_from_buffer(1, 4);
 	string cookie = parse_cookie_from_buffer();
 	if (check_tickets(reservation_id, cookie, current_time, reservations_map)) {
-		printf("ESSAA\n");
-		struct reservation r = reservations_map.at(reservation_id);
-		printf("ESSAA2\n");
+		struct reservation &r = reservations_map.at(reservation_id);
 		if (!r.achieved) {
 			r.achieved = true;
-			printf("%d\n", r.ticket_count);
 			int count = r.ticket_count;
 			for (int i = 0; i < count; i++) {
-				if(i < 10) {
-					printf("%d\n", r.ticket_count);
-				}
 				r.tickets.push_back(generate_ticket());
 			}
 		}
-		printf("ES\n");
 		fill_buffer_tickets(reservation_id, r, message_length);
-		printf("ES\n");
 
 	} else {
 		insert_bad_request_to_buffer(reservation_id);
 		*message_length = BAD_REQUEST_MESSAGE_LENGTH;
 	}
-
-	printf("ES\n");
-
 }
 
 void parse_from_file(char *file_path, std::map<int, event_struct> &events_map) {
@@ -555,9 +549,7 @@ int main(int argc, char *argv[]) {
 				break;
 			}
 			case GET_TICKETS: {
-				printf("Halio1\n");
 				make_tickets(current_time, reservations_map, &message_length);
-				printf("Halio2\n");
 				break;
 			}
 			default: {
