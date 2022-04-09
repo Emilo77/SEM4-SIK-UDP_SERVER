@@ -566,7 +566,7 @@ int main(int argc, char *argv[]) {
 		                           sizeof(shared_buffer));
 
 		time_t current_time = time(nullptr);
-		remove_expired_reservations(events_map, reservations_map, current_time);
+//		remove_expired_reservations(events_map, reservations_map, current_time);
 
 		is_valid = check_if_message_valid(read_length);
 		if (is_valid) {
