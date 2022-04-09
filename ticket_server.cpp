@@ -14,6 +14,7 @@
 #include <map>
 #include <sys/stat.h>
 #include <vector>
+#include <algorithm>
 
 using std::string;
 
@@ -47,7 +48,7 @@ using std::string;
 #define BUFFER_SIZE 65507
 char shared_buffer[BUFFER_SIZE];
 int reservation_current_id = 0;
-
+int ticket_current_id = 0;
 
 #define PRINT_ERRNO()                                                  \
     do {                                                               \
@@ -230,6 +231,10 @@ int new_reservation_id() {
 	return reservation_current_id++;
 }
 
+int new_ticket_id() {
+	return ticket_current_id++;
+}
+
 int parse_number_from_buffer(int index, int size) { //sprawdzić
 	int arr[size];
 	int result = 0;
@@ -259,26 +264,40 @@ bool check_reservation(int event_id, int ticket_count,
                        std::map<int, event_struct> &events_map,
                        std::map<int, struct reservation> &reservations_map) {
 
-	if (reservations_map.find(event_id) == reservations_map.end())
+	if (ticket_count == 0) {
 		return false;
-	if (ticket_count == 0)
+	}
+	if (events_map.at(event_id).tickets_available < ticket_count) {
 		return false;
-	if (events_map.at(event_id).tickets_available < ticket_count)
-		return false;
-	if (9 + ticket_count * TICKET_OCTETS > BUFFER_SIZE)
-		return false;   //sytuacja przepełnienia bufora
+	}
+	if (9 + ticket_count * TICKET_OCTETS > BUFFER_SIZE) {
+		return false;//sytuacja przepełnienia bufora
+	}
 
 	return true;
 }
 
-string generate_cookie() { //todo!
-	string cookie(48, 0);
-	return cookie;
+string generate_cookie(int reservation_id) { //todo!
+
+	std::string str(COOKIE_SIZE, (int) 32);
+	for (int i = COOKIE_SIZE - 1; i >= 0; i--) {
+		str[i] = (char) (reservation_id % 94 + 33);
+		reservation_id /= 94;
+	}
+	return str;
 }
 
 string generate_ticket() { //todo!
-	string cookie(7, 0);
-	return cookie;
+	int ticket_id = new_ticket_id();
+	char set[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+	int length = 7;
+	string ticket(length, set[0]);
+
+	for (int i = COOKIE_SIZE - 1; i >= 0; i--) {
+		ticket[i] = (char) (set[ticket_id % strlen(set)]);
+		ticket_id /= (int) strlen(set);
+	}
+	return ticket;
 }
 
 template<typename T>
@@ -349,7 +368,7 @@ void make_reservation(time_t expiration_time,
 		new_reservation.event_id = event_id;
 		new_reservation.ticket_count = ticket_count;
 		new_reservation.expiration_time = expiration_time;
-		new_reservation.cookie = generate_cookie(); //todo!
+		new_reservation.cookie = generate_cookie(reservation_id); //todo!
 		new_reservation.achieved = false;
 
 		reservations_map.insert({reservation_id, new_reservation});
@@ -391,13 +410,13 @@ void fill_buffer_events(std::map<int, event_struct> &events_map,
 	*message_length = index;
 }
 
-void fill_buffer_tickets(int reservation_id, const struct reservation& r,
+void fill_buffer_tickets(int reservation_id, const struct reservation &r,
                          int *index) {
 
 	move_to_buff(TICKETS, 1, index);
 	move_to_buff(reservation_id, 4, index);
 	move_to_buff(r.ticket_count, 2, index);
-	for(const string& ticket : r.tickets) {
+	for (const string &ticket: r.tickets) {
 		move_to_buff(ticket, index);
 	}
 }
@@ -421,21 +440,31 @@ void make_tickets(time_t current_time,
 
 	int reservation_id = parse_number_from_buffer(1, 4);
 	string cookie = parse_cookie_from_buffer();
-
 	if (check_tickets(reservation_id, cookie, current_time, reservations_map)) {
+		printf("ESSAA\n");
 		struct reservation r = reservations_map.at(reservation_id);
+		printf("ESSAA2\n");
 		if (!r.achieved) {
 			r.achieved = true;
-			for (int i = 0; i < r.ticket_count; i++) {
+			printf("%d\n", r.ticket_count);
+			int count = r.ticket_count;
+			for (int i = 0; i < count; i++) {
+				if(i < 10) {
+					printf("%d\n", r.ticket_count);
+				}
 				r.tickets.push_back(generate_ticket());
 			}
 		}
+		printf("ES\n");
 		fill_buffer_tickets(reservation_id, r, message_length);
+		printf("ES\n");
 
 	} else {
 		insert_bad_request_to_buffer(reservation_id);
 		*message_length = BAD_REQUEST_MESSAGE_LENGTH;
 	}
+
+	printf("ES\n");
 
 }
 
@@ -526,13 +555,20 @@ int main(int argc, char *argv[]) {
 				break;
 			}
 			case GET_TICKETS: {
+				printf("Halio1\n");
 				make_tickets(current_time, reservations_map, &message_length);
+				printf("Halio2\n");
 				break;
 			}
 			default: {
 				ignore_message = true;
 			}
 		}
+
+//		for (int i = 0; i < 50; i++) {
+//			printf("%d %d %c\n", i, shared_buffer[i], shared_buffer[i]);
+//		}
+//		printf("\n");
 
 		if (!ignore_message) {
 			send_message(socket_fd, &client_address, shared_buffer,
