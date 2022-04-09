@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <vector>
 #include <algorithm>
+#include <cassert>
 
 using std::string;
 using std::vector;
@@ -32,7 +33,6 @@ using reservationMap = std::map<int, struct reservation>;
 #define TICKETS 6
 #define BAD_REQUEST 255
 
-
 #define CONST_OCTETS 7
 #define TICKET_OCTETS 7
 #define MAX_DESCRIPTION_SIZE 81
@@ -47,8 +47,9 @@ using reservationMap = std::map<int, struct reservation>;
 
 #define BUFFER_SIZE 65507
 char shared_buffer[BUFFER_SIZE];
-int reservation_current_id = 0;
+static char ticket_charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 int ticket_current_id = 0;
+int reservation_current_id = 0;
 
 #define PRINT_ERRNO()                                                  \
     do {                                                               \
@@ -188,22 +189,22 @@ void check_parameters(int argc, char *argv[], int *port_ptr, int *timeout_ptr,
 	if ((argc < 3 || argc > 7) || argc % 2 == 0)
 		exit_program(WRONG_PARAMETERS);
 
-	bool flag_file_occured = false;
-	bool flag_port_occured = false;
-	bool flag_timeout_occured = false;
+	bool flag_file_occurred = false;
+	bool flag_port_occurred = false;
+	bool flag_timeout_occurred = false;
 
 	for (int i = 1; i < argc; i += 2) {
-		if (strcmp(argv[i], "-f") == 0 && !flag_file_occured) {
-			flag_file_occured = true;
+		if (strcmp(argv[i], "-f") == 0 && !flag_file_occurred) {
+			flag_file_occurred = true;
 			check_file_path(argv[i + 1]);
 			*file_index = (i + 1);
 
-		} else if (strcmp(argv[i], "-p") == 0 && !flag_port_occured) {
-			flag_port_occured = true;
+		} else if (strcmp(argv[i], "-p") == 0 && !flag_port_occurred) {
+			flag_port_occurred = true;
 			check_port(argv[i + 1], port_ptr);
 
-		} else if (strcmp(argv[i], "-t") == 0 && !flag_timeout_occured) {
-			flag_timeout_occured = true;
+		} else if (strcmp(argv[i], "-t") == 0 && !flag_timeout_occurred) {
+			flag_timeout_occurred = true;
 			check_timeout(argv[i + 1], timeout_ptr);
 
 		} else {
@@ -211,13 +212,13 @@ void check_parameters(int argc, char *argv[], int *port_ptr, int *timeout_ptr,
 		}
 	}
 
-	if (argc >= 3 && !flag_file_occured)
+	if (argc >= 3 && !flag_file_occurred)
 		exit_program(WRONG_PARAMETERS);
 
-	if ((argc >= 5 && (!flag_port_occured && !flag_timeout_occured)))
+	if ((argc >= 5 && (!flag_port_occurred && !flag_timeout_occurred)))
 		exit_program(WRONG_PARAMETERS);
 
-	if ((argc >= 7 && (!flag_port_occured || !flag_timeout_occured)))
+	if ((argc >= 7 && (!flag_port_occurred || !flag_timeout_occurred)))
 		exit_program(WRONG_PARAMETERS);
 }
 
@@ -250,20 +251,19 @@ string parse_cookie_from_buffer() {
 	return cookie;
 }
 
-int event_size_in_buffer(event e) {
-	return e.description_length + CONST_OCTETS;
-}
-
 bool check_reservation(int event_id, int ticket_count, eventMap &events_map,
                        reservationMap &reservations_map) {
 
 	if (ticket_count == 0) {
 		return false;
 	}
+	if (events_map.find(event_id) == events_map.end()) {
+		return false;
+	}
 	if (events_map.at(event_id).tickets_available < ticket_count) {
 		return false;
 	}
-	if (9 + ticket_count * TICKET_OCTETS > BUFFER_SIZE) {
+	if ((CONST_OCTETS + ticket_count * TICKET_OCTETS) > BUFFER_SIZE) {
 		return false;//sytuacja przepełnienia bufora
 	}
 
@@ -282,13 +282,13 @@ string generate_cookie(int reservation_id) { //todo!
 
 string generate_ticket() { //todo!
 	int ticket_id = new_ticket_id();
-	char set[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 	int length = 7;
-	string ticket(length, set[0]);
+	string ticket(length, ticket_charset[0]);
+	size_t charset_size = strlen(ticket_charset);
 
 	for (int i = 7 - 1; i >= 0; i--) {
-		ticket[i] = (set[ticket_id % strlen(set)]);
-		ticket_id /= (int) strlen(set);
+		ticket[i] = (ticket_charset[ticket_id % charset_size]);
+		ticket_id /= (int) charset_size;
 	}
 	return ticket;
 }
@@ -325,7 +325,7 @@ void move_to_buff(string s, int *index) {
 }
 
 void insert_bad_request_to_buffer(int id) {
-	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
+	memset(shared_buffer, 0, GET_EVENTS_MSG_LENGTH); // clean the buffer
 	int index = 0;
 
 	move_to_buff(BAD_REQUEST, 1, &index);
@@ -333,7 +333,7 @@ void insert_bad_request_to_buffer(int id) {
 }
 
 void insert_reservation_to_buffer(int reservation_id, reservation &r) {
-	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
+	memset(shared_buffer, 0, GET_RESERVATION_MSG_LENGTH); // clean the buffer
 	int index = 0;
 
 	move_to_buff(RESERVATION, 1, &index);
@@ -357,12 +357,14 @@ void send_reservation_or_bad(time_t expiration_time, eventMap &events_map,
 		int reservation_id = new_reservation_id();
 
 		reservation new_reservation;
+		new_reservation.achieved = false;
 		new_reservation.event_id = event_id;
 		new_reservation.ticket_count = ticket_count;
 		new_reservation.expiration_time = expiration_time;
 		new_reservation.cookie = generate_cookie(reservation_id);
 
 		reservations_map.insert({reservation_id, new_reservation});
+		assert(events_map.find(event_id) != events_map.end());
 		events_map.at(event_id).tickets_available -= ticket_count;
 
 		insert_reservation_to_buffer(reservation_id, new_reservation);
@@ -382,14 +384,14 @@ void insert_event_to_buffer(event &e, int event_id, int *index) {
 }
 
 void send_events(eventMap &events_map, int *message_length) {
-	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
+	//chyba nie musimy tu czyścić bufora, bo rozmiar wiadomości to 1 i tę komórkę nadpisujemy
 	int index = 0;
 	move_to_buff(EVENTS, 1, &index);
 
 	for (auto element: events_map) {
 		int event_id = element.first;
 		event eve = element.second;
-		int eve_size = event_size_in_buffer(eve);
+		int eve_size = eve.description_length + CONST_OCTETS;
 
 		if (index + eve_size > BUFFER_SIZE) {
 			break;
@@ -402,7 +404,7 @@ void send_events(eventMap &events_map, int *message_length) {
 
 void fill_buffer_tickets(int reservation_id, const reservation &r,
                          int *index) {
-
+	memset(shared_buffer, 0, GET_TICKETS_MSG_LENGTH); // clean the buffer
 	move_to_buff(TICKETS, 1, index);
 	move_to_buff(reservation_id, 4, index);
 	move_to_buff(r.ticket_count, 2, index);
@@ -423,7 +425,7 @@ bool check_tickets(int reservation_id, string &cookie, time_t current_time,
 	reservation r = reservations_map.at(reservation_id);
 	if (r.cookie != cookie)
 		return false;
-	if (!r.achieved && r.expiration_time < current_time)
+	if (!r.achieved && (r.expiration_time < current_time))
 		return false;
 	return true;
 }
@@ -482,6 +484,7 @@ void remove_expired_reservations(eventMap &events_map,
 		int r_id = element.first;
 		reservation r = element.second;
 		if (!r.achieved && r.expiration_time < current_time) {
+//			assert(events_map.find(r.event_id) != events_map.end());
 			events_map.at(r.event_id).tickets_available += r.ticket_count;
 			reservations_map.erase(r_id);
 		}
@@ -527,7 +530,7 @@ execute_command_send_message(int socket_fd,
 			printf("Cos jest nie tak\n");
 		}
 	}
-
+	printf("%d\n", reservation_current_id);
 	send_message(socket_fd, client_address, shared_buffer, *send_length);
 }
 
@@ -547,6 +550,7 @@ int main(int argc, char *argv[]) {
 	parse_from_file(file_path, events_map);
 
 	printf("Listening on port %u\n", port);
+//	printf("%zu\n", events_map.size());
 
 	int socket_fd = bind_socket(port);
 	struct sockaddr_in client_address{};
