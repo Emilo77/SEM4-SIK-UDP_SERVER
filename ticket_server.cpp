@@ -219,7 +219,7 @@ int new_ticket_id() {
 	return ticket_current_id++;
 }
 
-int parse_number_from_buffer(int index, int size) { //sprawdzić
+int parse_number_from_buffer(int index, int size) {
 	int arr[size];
 	int result = 0;
 
@@ -232,8 +232,8 @@ int parse_number_from_buffer(int index, int size) { //sprawdzić
 	return result;
 }
 
-string parse_cookie_from_buffer() {
-	string cookie(COOKIE_SIZE, 0);
+char *parse_cookie_from_buffer() {
+	static char cookie[COOKIE_SIZE];
 	for (int i = 0; i < COOKIE_SIZE; i++) {
 		cookie[i] = shared_buffer[i + 5];
 	}
@@ -252,16 +252,16 @@ bool check_reservation(int event_id, int ticket_count, eventMap &events_map,
 	if (events_map.at(event_id).tickets_available < ticket_count) {
 		return false;
 	}
-	if ((CONST_OCTETS + ticket_count * TICKET_OCTETS) > BUFFER_SIZE) {
+	if ((TICKET_OCTETS + ticket_count * TICKET_OCTETS) > BUFFER_SIZE) {
 		return false;//sytuacja przepełnienia bufora
 	}
 
 	return true;
 }
 
-string generate_cookie(int reservation_id) { //todo!
+char *generate_cookie(int reservation_id) {
 
-	std::string str(COOKIE_SIZE, (int) 32);
+	static char str[COOKIE_SIZE];
 	for (int i = COOKIE_SIZE - 1; i >= 0; i--) {
 		str[i] = (char) (reservation_id % 94 + 33);
 		reservation_id /= 94;
@@ -269,10 +269,9 @@ string generate_cookie(int reservation_id) { //todo!
 	return str;
 }
 
-string generate_ticket() { //todo!
+char *generate_ticket() {
 	int ticket_id = new_ticket_id();
-	int length = 7;
-	string ticket(length, ticket_charset[0]);
+	static char ticket[TICKET_OCTETS];
 	size_t charset_size = strlen(ticket_charset);
 
 	for (int i = 7 - 1; i >= 0; i--) {
@@ -284,17 +283,18 @@ string generate_ticket() { //todo!
 
 template<typename T>
 void move_to_buff(vector<T> vec, int *index) {
-	for (int i = 0; i < vec.size(); i++) {
+	size_t size = vec.size();
+	for (int i = 0; i < size; i++) {
 		shared_buffer[*index + i] = (char) vec[i];
 	}
-	*index += (int) vec.size();
+	*index += (int) size;
 }
 
 void move_to_buff(size_t number, int octet_size, int *index) {
 	vector<size_t> result(octet_size, 0);
 	for (int i = octet_size - 1; i >= 0; i--) {
 		result[i] = number % COUNTING_BASE;
-		number /= COUNTING_BASE;
+		number = number >> 8;
 	}
 	move_to_buff(result, index);
 }
@@ -307,14 +307,14 @@ void move_to_buff(const char *str, int str_size, int *index) {
 }
 
 void move_to_buff(string s, int *index) {
-	for (int i = 0; i < s.length(); i++) {
+	size_t length = s.length();
+	for (int i = 0; i < length; i++) {
 		shared_buffer[*index + i] = (char) s[i];
 	}
-	*index += (int) s.length();
+	*index += (int) length;
 }
 
 void insert_bad_request_to_buffer(int id) {
-	memset(shared_buffer, 0, GET_EVENTS_MSG_LENGTH); // clean the buffer
 	int index = 0;
 
 	move_to_buff(BAD_REQUEST, 1, &index);
@@ -322,7 +322,6 @@ void insert_bad_request_to_buffer(int id) {
 }
 
 void insert_reservation_to_buffer(int reservation_id, reservation &r) {
-	memset(shared_buffer, 0, GET_RESERVATION_MSG_LENGTH); // clean the buffer
 	int index = 0;
 
 	move_to_buff(RESERVATION, 1, &index);
@@ -392,7 +391,6 @@ void send_events(eventMap &events_map, int *message_length) {
 
 void fill_buffer_tickets(int reservation_id, const reservation &r,
                          int *index) {
-	memset(shared_buffer, 0, GET_TICKETS_MSG_LENGTH); // clean the buffer
 	move_to_buff(TICKETS, 1, index);
 	move_to_buff(reservation_id, 4, index);
 	move_to_buff(r.ticket_count, 2, index);
@@ -424,7 +422,7 @@ void send_tickets_or_bad(time_t current_time, reservationMap &reservations_map,
 			r.achieved = true;
 			int count = r.ticket_count;
 			for (int i = 0; i < count; i++) {
-				r.tickets.push_back(generate_ticket());
+				r.tickets.emplace_back(generate_ticket());
 			}
 		}
 		fill_buffer_tickets(reservation_id, r, message_length);
@@ -466,14 +464,13 @@ void remove_expired_reservations(eventMap &events_map,
 	vector<int> reservations_to_remove;
 	for (const auto &element: reservations_map) {
 		int r_id = element.first;
-		reservation r = element.second;
+		reservation const &r = element.second;
 		if (!r.achieved && (r.expiration_time < current_time)) {
 			reservations_to_remove.push_back(r_id);
 		}
 	}
 	for (auto &r_id: reservations_to_remove) {
-		assert(reservations_map.find(r_id) != reservations_map.end());
-		reservation r = reservations_map.at(r_id);
+		reservation &r = reservations_map.at(r_id);
 		events_map.at(r.event_id).tickets_available += r.ticket_count;
 		reservations_map.erase(r_id);
 	}
