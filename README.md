@@ -83,3 +83,11 @@ g++ -Wall -Wextra -Wno-implicit-fallthrough -std=c++17 -O2
 ## Ocena
 
 Za to zadanie można otrzymać maksymalnie 10 punktów, w tym 6 punktów będzie przyznawanych za testy automatyczne, 1 punkty za ocenę wzrokową działania programu (m.in. za klarowność i adekwatność komunikatów) oraz 3 punkty za jakość kodu.
+
+
+<img src="https://media.giphy.com/media/DBLEpUC37DnIGgCnll/giphy.gif" width="480"> 
+
+### Todo:
+- [x] Tests passed
+- [ ] Code refactor
+- [ ] Generate better cookies and tickets
