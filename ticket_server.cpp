@@ -166,9 +166,8 @@ void check_file_path(char *path) {
 	}
 }
 
-void
-check_port(char *port_str,
-           int *port_ptr) {
+void check_port(char *port_str,
+                int *port_ptr) {
 	size_t port = strtoul(port_str, nullptr, 10);
 	if (port <= 0 || port > UINT16_MAX) {
 		exit_program(WRONG_PORT);
@@ -190,21 +189,17 @@ void check_parameters(int argc, char *argv[], int *port_ptr, int *timeout_ptr,
 		exit_program(WRONG_PARAMETERS);
 
 	bool flag_file_occurred = false;
-	bool flag_port_occurred = false;
-	bool flag_timeout_occurred = false;
 
 	for (int i = 1; i < argc; i += 2) {
-		if (strcmp(argv[i], "-f") == 0 && !flag_file_occurred) {
+		if (strcmp(argv[i], "-f") == 0) {
 			flag_file_occurred = true;
 			check_file_path(argv[i + 1]);
 			*file_index = (i + 1);
 
-		} else if (strcmp(argv[i], "-p") == 0 && !flag_port_occurred) {
-			flag_port_occurred = true;
+		} else if (strcmp(argv[i], "-p") == 0) {
 			check_port(argv[i + 1], port_ptr);
 
-		} else if (strcmp(argv[i], "-t") == 0 && !flag_timeout_occurred) {
-			flag_timeout_occurred = true;
+		} else if (strcmp(argv[i], "-t") == 0) {
 			check_timeout(argv[i + 1], timeout_ptr);
 
 		} else {
@@ -212,13 +207,7 @@ void check_parameters(int argc, char *argv[], int *port_ptr, int *timeout_ptr,
 		}
 	}
 
-	if (argc >= 3 && !flag_file_occurred)
-		exit_program(WRONG_PARAMETERS);
-
-	if ((argc >= 5 && (!flag_port_occurred && !flag_timeout_occurred)))
-		exit_program(WRONG_PARAMETERS);
-
-	if ((argc >= 7 && (!flag_port_occurred || !flag_timeout_occurred)))
+	if (!flag_file_occurred)
 		exit_program(WRONG_PARAMETERS);
 }
 
@@ -238,7 +227,7 @@ int parse_number_from_buffer(int index, int size) { //sprawdzić
 		arr[size - 1 - i] = (int) (unsigned char) shared_buffer[index + i];
 	}
 	for (int i = 0; i < size; i++) {
-		result += arr[i] * (int) pow(256, i);
+		result += arr[i] * (int) pow(COUNTING_BASE, i);
 	}
 	return result;
 }
@@ -482,7 +471,7 @@ void remove_expired_reservations(eventMap &events_map,
 			reservations_to_remove.push_back(r_id);
 		}
 	}
-	for (const auto &r_id: reservations_to_remove) {
+	for (auto &r_id: reservations_to_remove) {
 		assert(reservations_map.find(r_id) != reservations_map.end());
 		reservation r = reservations_map.at(r_id);
 		events_map.at(r.event_id).tickets_available += r.ticket_count;
