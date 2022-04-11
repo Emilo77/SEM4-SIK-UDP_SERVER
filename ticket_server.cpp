@@ -1,5 +1,6 @@
 #include <iostream>
 #include <random>
+#include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -39,6 +40,7 @@ using reservationMap = std::map<int, struct reservation>;
 #define FOUR_OCT 4
 #define EIGHT_OCT 8
 
+#define COOKIE_POS 5
 #define CONST_OCTETS 7
 #define TICKET_OCTETS 7
 #define MAX_DESCRIPTION_SIZE 80
@@ -98,6 +100,10 @@ struct reservation {
 	string cookie;
 	vector<string> tickets;
 };
+
+inline static char *get_ip(struct sockaddr_in *address) {
+	return inet_ntoa(address->sin_addr);
+}
 
 int bind_socket(uint16_t port) {
 	int socket_fd = socket(AF_INET, SOCK_DGRAM, 0); // creating IPv4 UDP socket
@@ -161,6 +167,8 @@ void exit_program(int status) {
 	}
 
 	message.append("\n");
+	printf("Usage: {argv[0]} -f <path to events file> "
+	       "[-p <port>] [-t <timeout>]\n");
 	fprintf(stderr, "%s", message.c_str());
 	exit(1);
 }
@@ -241,7 +249,7 @@ int parse_number_from_buffer(int index, int size) {
 char *parse_cookie_from_buffer() {
 	static char cookie[COOKIE_SIZE];
 	for (int i = 0; i < COOKIE_SIZE; i++) {
-		cookie[i] = shared_buffer[i + 5];
+		cookie[i] = shared_buffer[i + COOKIE_POS];
 	}
 	return cookie;
 }
@@ -271,11 +279,11 @@ string generate_cookie() {
 	std::random_device rd;   // non-deterministic generator
 	std::mt19937 gen(rd());  // to seed mersenne twister.
 	std::uniform_int_distribution<> dist(33, 126);
-	// distribute results between 1 and 6 inclusive.
+	// distribute results between 33 and 126 inclusive.
 	for (int i = 0; i < COOKIE_SIZE; i++) {
 		cookie[i] = (char) dist(gen);
 	}
-
+//	std::cout << cookie + "\n";
 	return cookie;
 }
 
@@ -519,10 +527,18 @@ void execute_command_send_message(int socket_fd,
 			break;
 		}
 		default: {
-			printf("Cos jest nie tak\n");
+			printf("Message has an unexpected type.\n");
 		}
 	}
 	send_message(socket_fd, client_address, shared_buffer, *send_length);
+
+	int sent_message_id = (int) (unsigned char) shared_buffer[0];
+	if (sent_message_id != BAD_REQUEST) {
+		printf("Server followed the instructions from received message.\n");
+	} else {
+		printf("Server received the message with incorrect data.\n");
+	}
+	printf("Server sent message with message_id = %d.\n", sent_message_id);
 }
 
 
@@ -544,7 +560,9 @@ int main(int argc, char *argv[]) {
 	printf("Listening on port %u\n", port);
 
 	int socket_fd = bind_socket(port);
+
 	struct sockaddr_in client_address{};
+	char *ip = get_ip(&client_address);
 
 	size_t read_length;
 	bool is_valid;
@@ -557,6 +575,7 @@ int main(int argc, char *argv[]) {
 		                           shared_buffer,
 		                           sizeof(shared_buffer));
 
+		printf("Received message from [%s:%d].\n", ip, port);
 
 		current_time = time(nullptr);
 		remove_expired_reservations(events_map, reservations_map, current_time);
@@ -567,6 +586,9 @@ int main(int argc, char *argv[]) {
 			                             events_map, reservations_map,
 			                             current_time, timeout, &send_length);
 			memset(shared_buffer, 0, send_length);
+		} else {
+			printf("Received message does not have correct parameters.\n"
+				   "Server ignored the message\n");
 		}
 
 	} while (read_length > 0);
