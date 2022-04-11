@@ -1,3 +1,5 @@
+#include <iostream>
+#include <random>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -263,22 +265,26 @@ bool check_reservation(int event_id, int ticket_count, eventMap &events_map,
 	return true;
 }
 
-char *generate_cookie(int reservation_id) {
+string generate_cookie() {
 
-	static char str[COOKIE_SIZE];
-	for (int i = COOKIE_SIZE - 1; i >= 0; i--) {
-		str[i] = (char) (reservation_id % 94 + 33);
-		reservation_id /= 94;
+	string cookie(COOKIE_SIZE, 33);
+	std::random_device rd;   // non-deterministic generator
+	std::mt19937 gen(rd());  // to seed mersenne twister.
+	std::uniform_int_distribution<> dist(33, 126);
+	// distribute results between 1 and 6 inclusive.
+	for (int i = 0; i < COOKIE_SIZE; i++) {
+		cookie[i] = (char) dist(gen);
 	}
-	return str;
+
+	return cookie;
 }
 
-char *generate_ticket() {
+string generate_ticket() {
 	int ticket_id = new_ticket_id();
-	static char ticket[TICKET_OCTETS];
+	string ticket(TICKET_OCTETS, 'A');
 	size_t charset_size = strlen(ticket_charset);
 
-	for (int i = 7 - 1; i >= 0; i--) {
+	for (int i = TICKET_OCTETS - 1; i >= 0; i--) {
 		ticket[i] = (ticket_charset[ticket_id % charset_size]);
 		ticket_id /= (int) charset_size;
 	}
@@ -353,7 +359,7 @@ void send_reservation_or_bad(time_t expiration_time, eventMap &events_map,
 		new_reservation.event_id = event_id;
 		new_reservation.ticket_count = ticket_count;
 		new_reservation.expiration_time = expiration_time;
-		new_reservation.cookie = generate_cookie(reservation_id);
+		new_reservation.cookie = generate_cookie();
 
 		reservations_map.insert({reservation_id, new_reservation});
 		events_map.at(event_id).tickets_available -= ticket_count;
