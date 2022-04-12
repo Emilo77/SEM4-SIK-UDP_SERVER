@@ -90,4 +90,4 @@ Za to zadanie można otrzymać maksymalnie 10 punktów, w tym 6 punktów będzie
 ### Todo:
 - [x] Tests passed
 - [ ] Code refactor
-- [ ] Generate better cookies and tickets
+- [X] Generate better cookies and tickets
