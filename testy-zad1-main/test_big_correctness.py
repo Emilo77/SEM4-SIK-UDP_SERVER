@@ -50,7 +50,7 @@ class CorrectnessClient:
             assert reservation_info.event_id == event_id
             assert reservation_info.ticket_count == ticket_count
             assert reservation_info.cookie not in self.used_cookies
-            assert abs(reservation_info.expiration_time - (int(time.time()) + 50)) <= 1
+            assert abs(reservation_info.expiration_time - (int(time.time()) + 5)) <= 1
             self.used_cookies.add(reservation_info.cookie)
             event_info.ticket_count -= ticket_count
             self.possible_reservations.append(reservation_info)
@@ -98,7 +98,7 @@ def events_various_ticket_count(file):
         file.write(str(i) + '\n' + str(random.randint(0, 5000)) + '\n')
 
 def test_big_correctness():
-    server = start_server(generate_file(events_various_ticket_count), timeout = 50)
+    server = start_server(generate_file(events_various_ticket_count), timeout = 5)
     client = CorrectnessClient()
     for i in range(7500):
         client.do_random_operation()
