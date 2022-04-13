@@ -1,19 +1,19 @@
-#include <iostream>
-#include <random>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/stat.h>
 #include <algorithm>
+#include <arpa/inet.h>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
-#include <cmath>
+#include <iostream>
+#include <map>
+#include <netinet/in.h>
+#include <random>
+#include <string>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <utility>
 #include <vector>
-#include <string>
-#include <map>
 
 using std::string;
 using std::vector;
@@ -29,13 +29,13 @@ using reservationMap = std::map<int, struct reservation>;
 #define DEFAULT_PORT 2022
 #define DEFAULT_TIMEOUT 5
 
-#define GET_EVENTS (uint8_t) 1
-#define EVENTS (uint8_t) 2
-#define GET_RESERVATION (uint8_t) 3
-#define RESERVATION (uint8_t) 4
-#define GET_TICKETS (uint8_t) 5
-#define TICKETS (uint8_t) 6
-#define BAD_REQUEST (uint8_t) 255
+#define GET_EVENTS (uint8_t)1
+#define EVENTS (uint8_t)2
+#define GET_RESERVATION (uint8_t)3
+#define RESERVATION (uint8_t)4
+#define GET_TICKETS (uint8_t)5
+#define TICKETS (uint8_t)6
+#define BAD_REQUEST (uint8_t)255
 
 #define TWO_OCT 2
 #define FOUR_OCT 4
@@ -53,546 +53,525 @@ using reservationMap = std::map<int, struct reservation>;
 #define GET_EVENTS_MSG_LENGTH 1
 #define GET_RESERVATION_MSG_LENGTH 7
 #define GET_TICKETS_MSG_LENGTH 53
-#define RESERVATION_MSG_LENGTH 67
+
 #define BAD_REQUEST_MSG_LENGTH 5
 
 #define BUFFER_SIZE 65507
-char shared_buffer[BUFFER_SIZE];
 static char ticket_charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 int ticket_current_id = 0;
 int reservation_current_id = 0;
 
-#define PRINT_ERRNO()                                                  \
-    do {                                                               \
-        if (errno != 0) {                                              \
-            fprintf(stderr, "Error: errno %d in %s at %s:%d\n%s\n",    \
-              errno, __func__, __FILE__, __LINE__, strerror(errno));   \
-            exit(EXIT_FAILURE);                                        \
-        }                                                              \
-    } while (0)
+#define PRINT_ERRNO()                                                          \
+  do {                                                                         \
+    if (errno != 0) {                                                          \
+      fprintf(stderr, "Error: errno %d in %s at %s:%d\n%s\n", errno, __func__, \
+              __FILE__, __LINE__, strerror(errno));                            \
+      exit(EXIT_FAILURE);                                                      \
+    }                                                                          \
+  } while (0)
 
-// Set `errno` to 0 and evaluate `x`. If `errno` changed, describe it and exit.
-#define CHECK_ERRNO(x)                                                             \
-    do {                                                                           \
-        errno = 0;                                                                 \
-        (void) (x);                                                                \
-        PRINT_ERRNO();                                                             \
-    } while (0)
+#define CHECK_ERRNO(x)                                                         \
+  do {                                                                         \
+    errno = 0;                                                                 \
+    (void)(x);                                                                 \
+    PRINT_ERRNO();                                                             \
+  } while (0)
 
-#define ENSURE(x)                                                         \
-    do {                                                                  \
-        bool result = (x);                                                \
-        if (!result) {                                                    \
-            fprintf(stderr, "Error: %s was false in %s at %s:%d\n",       \
-                #x, __func__, __FILE__, __LINE__);                        \
-            exit(EXIT_FAILURE);                                           \
-        }                                                                 \
-    } while (0)
+#define ENSURE(x)                                                              \
+  do {                                                                         \
+    bool result = (x);                                                         \
+    if (!result) {                                                             \
+      fprintf(stderr, "Error: %s was false in %s at %s:%d\n", #x, __func__,    \
+              __FILE__, __LINE__);                                             \
+      exit(EXIT_FAILURE);                                                      \
+    }                                                                          \
+  } while (0)
+
+int new_reservation_id() { return reservation_current_id++; }
+
+int new_ticket_id() { return ticket_current_id++; }
 
 struct event {
-	string description;
-	uint8_t description_length;
-	uint16_t tickets_available;
+  string description;
+  uint8_t description_length;
+  uint16_t tickets_available;
 
-	event(string description, uint8_t descriptionLength,
-	      uint16_t ticketsAvailable) : description(std::move(description)),
-	                                   description_length(descriptionLength),
-	                                   tickets_available(ticketsAvailable) {}
+  event(string description, uint8_t descriptionLength,
+        uint16_t ticketsAvailable)
+      : description(std::move(description)),
+        description_length(descriptionLength),
+        tickets_available(ticketsAvailable) {}
 };
 
 struct reservation {
-	uint32_t event_id;
-	uint16_t ticket_count;
-	time_t expiration_time;
-	string cookie;
-	bool achieved{false};
-	vector<string> tickets;
+  uint32_t event_id;
+  uint16_t ticket_count;
+  time_t expiration_time;
+  string cookie;
+  bool achieved{false};
+  vector<string> tickets;
 
-	reservation(uint32_t eventId, uint16_t ticketCount, time_t expirationTime,
-	            string cookie) : event_id(eventId),
-	                             ticket_count(ticketCount),
-	                             expiration_time(expirationTime),
-	                             cookie(std::move(cookie)) {}
+  reservation(uint32_t eventId, uint16_t ticketCount, time_t expirationTime)
+      : event_id(eventId), ticket_count(ticketCount),
+        expiration_time(expirationTime), cookie(std::move(generate_cookie())) {}
 
+  void generate_ticket() {
+    int ticket_id = new_ticket_id();
+    string ticket(TICKET_OCTETS, 'A');
+    size_t charset_size = strlen(ticket_charset);
+
+    for (int i = TICKET_OCTETS - 1; i >= 0; i--) {
+      ticket[i] = (ticket_charset[ticket_id % charset_size]);
+      ticket_id /= (int)charset_size;
+    }
+    tickets.push_back(ticket);
+  }
+
+  static string generate_cookie() {
+    string cookie(COOKIE_SIZE, MIN_COOKIE_CHAR);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dist(MIN_COOKIE_CHAR, MAX_COOKIE_CHAR);
+    for (int i = 0; i < COOKIE_SIZE; i++) {
+      cookie[i] = (char)dist(gen);
+    }
+    return cookie;
+  }
+};
+class Data {
+
+public:
+  Data(int argc, char *argv[]) {
+    this->port = DEFAULT_PORT;
+    this->timeout = DEFAULT_TIMEOUT;
+    check_parameters(argc, argv);
+  }
+
+  void remove_expired_reservations(const Data &data, time_t &current_time) {
+    vector<int> reservations_to_remove;
+    for (const auto &element : reservations_map) {
+      int r_id = element.first;
+      reservation const &r = element.second;
+      if (!r.achieved && (r.expiration_time < current_time)) {
+        reservations_to_remove.push_back(r_id);
+      }
+    }
+    for (auto &r_id : reservations_to_remove) {
+      reservation &r = reservations_map.at(r_id);
+      events_map.at((int)r.event_id).tickets_available += r.ticket_count;
+      reservations_map.erase(r_id);
+    }
+  }
+
+  bool validate_tickets(int reservation_id, string &expected_cookie,
+                        time_t current_time) {
+    if (reservations_map.find(reservation_id) == reservations_map.end())
+      return false;
+    reservation &r = reservations_map.at(reservation_id);
+    return !((r.cookie != expected_cookie) ||
+             (!r.achieved && (r.expiration_time < current_time)));
+  }
+
+  bool validate_reservation(int event_id, int ticket_count) {
+    return !((ticket_count == 0) ||
+             (events_map.find(event_id) == events_map.end()) ||
+             (events_map.at(event_id).tickets_available < ticket_count) ||
+             ((TICKET_OCTETS + ticket_count * TICKET_OCTETS) > BUFFER_SIZE));
+  }
+
+private:
+  static void exit_program(int status) {
+    string message;
+    switch (status) {
+    case WRONG_FLAGS:
+      message = "WRONG SERVER FLAGS";
+      break;
+    case WRONG_PATH:
+      message = "WRONG PATH TO FILE PARAMETER";
+      break;
+    case WRONG_PORT:
+      message = "WRONG PORT NUMBER PARAMETER";
+      break;
+    case WRONG_TIMEOUT:
+      message = "WRONG TIMEOUT PARAMETER";
+      break;
+    case WRONG_ARGS_NUMBER:
+      message = "WRONG ARGUMENTS NUMBER";
+      break;
+    default:
+      message = "WRONG PARAMETERS";
+    }
+    message.append("\n");
+    printf("Usage: {argv[0]} -f <path to events file> "
+           "[-p <port>] [-t <timeout>]\n");
+    fprintf(stderr, "%s", message.c_str());
+    exit(1);
+  }
+
+  void bind_socket() {
+    socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    ENSURE(socket_fd > 0);
+
+    struct sockaddr_in server_address {};
+    server_address.sin_family = AF_INET; // IPv4
+    server_address.sin_addr.s_addr =
+        htonl(INADDR_ANY); // listening on all interfaces
+    server_address.sin_port = htons(port);
+
+    CHECK_ERRNO(bind(socket_fd, (struct sockaddr *)&server_address,
+                     (socklen_t)sizeof(server_address)));
+  }
+
+  void check_file_path(char *path) {
+    struct stat buffer {};
+    if (stat(path, &buffer) != 0) {
+      exit_program(WRONG_PATH);
+    }
+    file_path = path;
+  }
+
+  int get_port(char *port_str) {
+    port = (int)strtoul(port_str, nullptr, 10);
+    if (port <= 0 || port > UINT16_MAX) {
+      exit_program(WRONG_PORT);
+    }
+    return port;
+  }
+
+  int get_timeout(char *timeout_str) {
+    timeout = (int)strtoul(timeout_str, nullptr, 10);
+    if (timeout < 1 || timeout > 86400) {
+      exit_program(WRONG_TIMEOUT);
+    }
+    return timeout;
+  }
+
+  void parse_from_file() {
+    FILE *fp = fopen(file_path, "r+");
+    int event_id = 0;
+    char description[MAX_DESCRIPTION_SIZE + 2];
+    char tickets_str[MAX_DESCRIPTION_SIZE + 2];
+
+    while (fgets(description, MAX_DESCRIPTION_SIZE + 2, fp) &&
+           fgets(tickets_str, MAX_DESCRIPTION_SIZE + 2, fp)) {
+
+      int description_length = (int)strlen(description) - 1;
+      string description_str = string(description, description_length);
+      event new_event = event(description_str, description_length,
+                              strtoul(tickets_str, nullptr, 10));
+      events_map.insert({event_id, new_event});
+      event_id++;
+    }
+
+    fclose(fp);
+  }
+
+  void check_parameters(int argc, char *argv[]) {
+    if ((argc < 3 || argc > 7) || argc % 2 == 0)
+      exit_program(WRONG_ARGS_NUMBER);
+
+    bool flag_file_occurred = false;
+    for (int i = 1; i < argc; i += 2) {
+      if (strcmp(argv[i], "-f") == 0) {
+        flag_file_occurred = true;
+        check_file_path(argv[i + 1]);
+        file_path = argv[i + 1];
+
+      } else if (strcmp(argv[i], "-p") == 0) {
+        this->port = get_port(argv[i + 1]);
+
+      } else if (strcmp(argv[i], "-t") == 0) {
+        this->timeout = get_timeout(argv[i + 1]);
+
+      } else {
+        exit_program(WRONG_FLAGS);
+      }
+    }
+    if (!flag_file_occurred)
+      exit_program(WRONG_FLAGS);
+  }
+
+public:
+  void init() {
+    bind_socket();
+    parse_from_file();
+  }
+
+  [[nodiscard]] char *get_ip() const {
+    return inet_ntoa(this->client_address.sin_addr);
+  }
+
+  [[nodiscard]] int get_socket() const { return socket_fd; }
+
+  [[nodiscard]] int get_port() const { return port; }
+
+  [[nodiscard]] int get_timeout() const { return timeout; }
+
+  [[nodiscard]] eventMap &get_events_map() { return events_map; }
+
+  reservationMap &getReservationsMap() { return reservations_map; }
+
+  sockaddr_in *get_client_address() { return &client_address; } // może źle
+
+private:
+  int port;
+  int timeout;
+  int socket_fd{};
+  char *file_path{};
+  struct sockaddr_in client_address {};
+  eventMap events_map;
+  reservationMap reservations_map;
 };
 
-inline static char *get_ip(struct sockaddr_in *address) {
-	return inet_ntoa(address->sin_addr);
-}
+class Buffer {
 
-int bind_socket(uint16_t port) {
-	int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
-	// creating IPv4 UDP socket
-	ENSURE(socket_fd > 0);
-	// after socket() call; we should close(sock) on any execution path;
+private:
+  template <typename T> void move_to_buff(vector<T> vec) {
+    size_t size = vec.size();
+    for (int i = 0; i < size; i++) {
+      buffer[current_size + i] = (char)vec[i];
+    }
+    set_current_size(current_size + size);
+  }
 
-	struct sockaddr_in server_address{};
-	server_address.sin_family = AF_INET; // IPv4
-	server_address.sin_addr.s_addr = htonl(
-			INADDR_ANY); // listening on all interfaces
-	server_address.sin_port = htons(port);
+  template <typename T> void move_to_buff(T number) {
+    int octet_size = sizeof(T);
+    vector<size_t> result(octet_size, 0);
+    for (int i = octet_size - 1; i >= 0; i--) {
+      result[i] = number % COUNTING_BASE;
+      number = number >> 8;
+    }
+    move_to_buff(result);
+  }
 
-	// bind the socket to a concrete address
-	CHECK_ERRNO(bind(socket_fd, (struct sockaddr *) &server_address,
-	                 (socklen_t) sizeof(server_address)));
+  void move_to_buff(string s) {
+    size_t length = s.length();
+    for (int i = 0; i < length; i++) {
+      buffer[current_size + i] = s[i];
+    }
+    current_size += length;
+  }
 
-	return socket_fd;
-}
+public:
+  void insert_single_event(const event &e, int event_id) {
+    move_to_buff(event_id);
+    move_to_buff(e.tickets_available);
+    move_to_buff(e.description_length);
+    move_to_buff(e.description);
+  }
 
-void send_message(int socket_fd, const struct sockaddr_in *client_address,
-                  const char *message, size_t length) {
-	auto address_length = (socklen_t) sizeof(*client_address);
-	int flags = 0;
-	ssize_t sent_length = sendto(socket_fd, message, length, flags,
-	                             (struct sockaddr *) client_address,
-	                             address_length);
-	ENSURE(sent_length == (ssize_t) length);
-}
+  void insert_tickets(int reservation_id, const reservation &r) {
+    set_size_to_zero();
 
-size_t
-read_message(int socket_fd, struct sockaddr_in *client_address, char *buffer,
-             size_t max_length) {
-	auto address_length = (socklen_t) sizeof(*client_address);
-	int flags = 0; // we do not request anything special
-	errno = 0;
-	ssize_t len = recvfrom(socket_fd, buffer, max_length, flags,
-	                       (struct sockaddr *) client_address, &address_length);
-	if (len < 0) {
-		PRINT_ERRNO();
-	}
-	return (size_t) len;
-}
+    move_to_buff(TICKETS);
+    move_to_buff(reservation_id);
+    move_to_buff(r.ticket_count);
+    for (const string &ticket : r.tickets) {
+      move_to_buff(ticket);
+    }
+  }
 
-void exit_program(int status) {
-	string message;
-	switch (status) {
-		case WRONG_FLAGS:
-			message = "WRONG SERVER FLAGS";
-			break;
-		case WRONG_PATH:
-			message = "WRONG PATH TO FILE PARAMETER";
-			break;
-		case WRONG_PORT:
-			message = "WRONG PORT NUMBER PARAMETER";
-			break;
-		case WRONG_TIMEOUT:
-			message = "WRONG TIMEOUT PARAMETER";
-			break;
-		case WRONG_ARGS_NUMBER:
-			message = "WRONG ARGUMENTS NUMBER";
-			break;
-		default:
-			message = "WRONG PARAMETERS";
-	}
-	message.append("\n");
-	printf("Usage: {argv[0]} -f <path to events file> "
-	       "[-p <port>] [-t <timeout>]\n");
-	fprintf(stderr, "%s", message.c_str());
-	exit(1);
-}
+  void insert_reservation(int reservation_id, reservation &r) {
+    set_size_to_zero();
 
-void check_file_path(char *path) {
-	struct stat buffer{};
-	if (stat(path, &buffer) != 0) {
-		exit_program(WRONG_PATH);
-	}
-}
+    move_to_buff(RESERVATION);
+    move_to_buff(reservation_id);
+    move_to_buff(r.event_id);
+    move_to_buff(r.ticket_count);
+    move_to_buff(r.cookie);
+    move_to_buff(r.expiration_time);
+  }
 
-void check_port(char *port_str, int *port_ptr) {
-	size_t port = strtoul(port_str, nullptr, 10);
-	if (port <= 0 || port > UINT16_MAX) {
-		exit_program(WRONG_PORT);
-	}
-	*port_ptr = (int) port;
-}
+  void insert_bad_request(int id) {
+    set_size_to_zero();
 
-void check_timeout(char *timeout_str, int *timeout_ptr) {
-	size_t timeout = strtoul(timeout_str, nullptr, 10);
-	if (timeout < 1 || timeout > 86400) {
-		exit_program(WRONG_TIMEOUT);
-	}
-	*timeout_ptr = (int) timeout;
-}
+    move_to_buff(BAD_REQUEST);
+    move_to_buff(id);
+  }
 
-void check_parameters(int argc, char *argv[], int *port_ptr, int *timeout_ptr,
-                      int *file_index) {
-	if ((argc < 3 || argc > 7) || argc % 2 == 0)
-		exit_program(WRONG_ARGS_NUMBER);
+  void insert_events(Data &data) {
+    set_size_to_zero();
 
-	bool flag_file_occurred = false;
-	for (int i = 1; i < argc; i += 2) {
-		if (strcmp(argv[i], "-f") == 0) {
-			flag_file_occurred = true;
-			check_file_path(argv[i + 1]);
-			*file_index = (i + 1);
+    move_to_buff(EVENTS);
+    for (auto &element : data.get_events_map()) {
+      int event_id = element.first;
+      event const &eve = element.second;
+      int eve_size = eve.description_length + CONST_OCTETS;
 
-		} else if (strcmp(argv[i], "-p") == 0) {
-			check_port(argv[i + 1], port_ptr);
+      if (current_size + eve_size > BUFFER_SIZE) {
+        break;
+      } else {
+        insert_single_event(eve, event_id);
+      }
+    }
+  }
 
-		} else if (strcmp(argv[i], "-t") == 0) {
-			check_timeout(argv[i + 1], timeout_ptr);
+  int parse_number(int size, int *index) {
+    int arr[size];
+    int result = 0;
 
-		} else {
-			exit_program(WRONG_FLAGS);
-		}
-	}
+    for (int i = 0; i < size; i++) {
+      arr[size - 1 - i] = (int)(unsigned char)buffer[*index + i];
+    }
+    for (int i = 0; i < size; i++) {
+      result += arr[i] * (int)pow(COUNTING_BASE, i);
+    }
+    *index += size;
+    return result;
+  }
 
-	if (!flag_file_occurred)
-		exit_program(WRONG_FLAGS);
-}
+  void try_inserting_reservation(Data &data, time_t time) {
+    int index = 1;
+    int event_id = parse_number(FOUR_OCT, &index);
+    int ticket_count = parse_number(TWO_OCT, &index);
+    if (data.validate_reservation(event_id, ticket_count)) {
 
-int new_reservation_id() {
-	return reservation_current_id++;
-}
+      int reservation_id = new_reservation_id();
+      reservation new_reservation =
+          reservation(event_id, ticket_count, time + data.get_timeout());
+      data.getReservationsMap().insert({reservation_id, new_reservation});
+      data.get_events_map().at(event_id).tickets_available -= ticket_count;
+      insert_reservation(reservation_id, new_reservation);
 
-int new_ticket_id() {
-	return ticket_current_id++;
-}
+    } else {
+      insert_bad_request(event_id);
+      set_current_size(BAD_REQUEST_MSG_LENGTH); // check
+    }
+  }
 
-int parse_number_from_buffer(int size, int *index) {
-	int arr[size];
-	int result = 0;
+  void try_inserting_tickets(Data &data, time_t time) {
+    int index = 1;
+    int reservation_id = parse_number(FOUR_OCT, &index);
+    string cookie = parse_cookie();
+    if (data.validate_tickets(reservation_id, cookie, time)) {
+      reservation &r = data.getReservationsMap().at(reservation_id);
+      if (!r.achieved) {
+        r.achieved = true;
+        for (int i = 0; i < r.ticket_count; i++) {
+          r.generate_ticket();
+        }
+      }
+      insert_tickets(reservation_id, r);
 
-	for (int i = 0; i < size; i++) {
-		arr[size - 1 - i] = (int) (unsigned char) shared_buffer[*index + i];
-	}
-	for (int i = 0; i < size; i++) {
-		result += arr[i] * (int) pow(COUNTING_BASE, i);
-	}
-	*index += size;
-	return result;
-}
+    } else {
+      insert_bad_request(reservation_id);
+      set_current_size(BAD_REQUEST_MSG_LENGTH); // check
+    }
+  }
 
-char *parse_cookie_from_buffer() {
-	static char cookie[COOKIE_SIZE];
-	for (int i = 0; i < COOKIE_SIZE; i++) {
-		cookie[i] = shared_buffer[i + COOKIE_POS];
-	}
-	return cookie;
-}
+  string parse_cookie() { return {buffer + COOKIE_POS, COOKIE_SIZE}; }
 
-bool check_reservation(int event_id, int ticket_count, eventMap &events_map,
-                       reservationMap &reservations_map) {
+  [[nodiscard]] size_t get_size() const { return current_size; }
 
-	if (ticket_count == 0) {
-		return false;
-	}
-	if (events_map.find(event_id) == events_map.end()) {
-		return false;
-	}
-	if (events_map.at(event_id).tickets_available < ticket_count) {
-		return false;
-	}
-	if ((TICKET_OCTETS + ticket_count * TICKET_OCTETS) > BUFFER_SIZE) {
-		return false;//sytuacja przepełnienia bufora
-	}
+  void set_size_to_zero() { current_size = 0; }
 
-	return true;
-}
+  void set_current_size(size_t number) { current_size = number; }
 
-string generate_cookie() {
+  char get_message_id() { return buffer[0]; }
 
-	string cookie(COOKIE_SIZE, MIN_COOKIE_CHAR);
-	std::random_device rd;
-	std::mt19937 gen(rd());  // to seed mersenne twister.
-	std::uniform_int_distribution<> dist(MIN_COOKIE_CHAR, MAX_COOKIE_CHAR);
-	for (int i = 0; i < COOKIE_SIZE; i++) {
-		cookie[i] = (char) dist(gen);
-	}
-	return cookie;
-}
+  char *get() { return buffer; }
 
-string generate_ticket() {
-	int ticket_id = new_ticket_id();
-	string ticket(TICKET_OCTETS, 'A');
-	size_t charset_size = strlen(ticket_charset);
+private:
+  char buffer[BUFFER_SIZE]{};
+  size_t current_size{0};
+};
 
-	for (int i = TICKET_OCTETS - 1; i >= 0; i--) {
-		ticket[i] = (ticket_charset[ticket_id % charset_size]);
-		ticket_id /= (int) charset_size;
-	}
-	return ticket;
-}
+class Server {
+public:
+  Server(Data data, const Buffer &buffer)
+      : data(std::move(data)), buffer(buffer) {}
 
-template<typename T>
-void move_to_buff(vector<T> vec, int *index) {
-	size_t size = vec.size();
-	for (int i = 0; i < size; i++) {
-		shared_buffer[*index + i] = (char) vec[i];
-	}
-	*index += (int) size;
-}
+private:
+  void send_message() {
+    auto address_length = (socklen_t)sizeof(*data.get_client_address());
+    int flags = 0;
+    sent_length =
+        sendto(data.get_socket(), buffer.get(), buffer.get_size(), flags,
+               (struct sockaddr *)data.get_client_address(), address_length);
+    ENSURE(sent_length == (ssize_t)buffer.get_size());
+  }
 
-template<typename T>
-void move_to_buff(T number, int *index) {
-	int octet_size = sizeof(T);
-	vector<size_t> result(octet_size, 0);
-	for (int i = octet_size - 1; i >= 0; i--) {
-		result[i] = number % COUNTING_BASE;
-		number = number >> 8;
-	}
-	move_to_buff(result, index);
-}
+  void read_message() {
+    auto address_length = (socklen_t)sizeof(*data.get_client_address());
+    int flags = 0;
+    errno = 0;
+    read_length =
+        recvfrom(data.get_socket(), buffer.get(), BUFFER_SIZE, flags,
+                 (struct sockaddr *)data.get_client_address(), &address_length);
+    if (read_length < 0) {
+      PRINT_ERRNO();
+    }
+    time_after_read = time(nullptr);
+    printf("Received message from [%s:%d].\n", data.get_ip(), data.get_port());
+  }
 
-void move_to_buff(string s, int *index) {
-	size_t length = s.length();
-	for (int i = 0; i < length; i++) {
-		shared_buffer[*index + i] = (char) s[i];
-	}
-	*index += (int) length;
-}
+  bool first_validate() {
+    uint8_t message_id = buffer.get_message_id();
+    return ((message_id == 1) && (read_length == GET_EVENTS_MSG_LENGTH)) ||
+           ((message_id == 3) && (read_length == GET_RESERVATION_MSG_LENGTH)) ||
+           ((message_id == 5) && (read_length == GET_TICKETS_MSG_LENGTH));
+  }
 
-void insert_event_to_buffer(event &e, int event_id, int *index) {
+  void show_information() {
+    uint8_t sent_message_id = buffer.get_message_id();
+    if (sent_message_id != BAD_REQUEST) {
+      printf("Server followed the instructions from received message.\n");
+    } else {
+      printf("Server received the message with incorrect data.\n");
+    }
+    printf("Server sent message with message_id = %d.\n", sent_message_id);
+  }
 
-	move_to_buff(event_id, index);
-	move_to_buff(e.tickets_available, index);
-	move_to_buff(e.description_length, index);
-	move_to_buff(e.description, index);
-}
+  void execute_command() {
+    data.remove_expired_reservations(data, time_after_read);
+    if (!first_validate()) {
+      printf("Received message does not have correct parameters.\n"
+             "Server ignored the message\n");
+      return;
+    }
 
-void insert_reservation_to_buffer(int reservation_id, reservation &r) {
-	int index = 0;
+    switch (buffer.get_message_id()) {
+    case GET_EVENTS:
+      buffer.insert_events(data);
+      break;
 
-	move_to_buff(RESERVATION, &index);
-	move_to_buff(reservation_id, &index);
-	move_to_buff(r.event_id, &index);
-	move_to_buff(r.ticket_count, &index);
-	move_to_buff(r.cookie, &index);
-	move_to_buff(r.expiration_time, &index);
-}
+    case GET_RESERVATION:
+      buffer.try_inserting_reservation(data, time_after_read);
+      break;
 
-void insert_bad_request_to_buffer(int id) {
-	int index = 0;
+    case GET_TICKETS:
+      buffer.try_inserting_tickets(data, time_after_read);
+      break;
 
-	move_to_buff(BAD_REQUEST, &index);
-	move_to_buff(id, &index);
-}
+    default:
+      printf("Message has an unexpected type.\n");
+    }
 
-void send_reservation_or_bad(time_t expiration_time, eventMap &events_map,
-                             reservationMap &reservations_map,
-                             int *message_length) {
+  }
 
-	int index = 1;
-	int event_id = parse_number_from_buffer(FOUR_OCT, &index);
-	int ticket_count = parse_number_from_buffer(TWO_OCT, &index);
+public:
+  void run() {
+    printf("Listening on port %u\n", data.get_port());
+    while (true) {
+      read_message();
+      execute_command();
+      show_information();
+      send_message();
+    }
+  }
 
-	if (check_reservation(event_id, ticket_count, events_map,
-	                      reservations_map)) {
-
-		int reservation_id = new_reservation_id();
-		reservation new_reservation = reservation(event_id, ticket_count,
-		                                          expiration_time,
-		                                          generate_cookie());
-
-		reservations_map.insert({reservation_id, new_reservation});
-		events_map.at(event_id).tickets_available -= ticket_count;
-		insert_reservation_to_buffer(reservation_id, new_reservation);
-		*message_length = RESERVATION_MSG_LENGTH;
-
-	} else {
-		insert_bad_request_to_buffer(event_id);
-		*message_length = BAD_REQUEST_MSG_LENGTH;
-	}
-}
-
-
-void send_events(eventMap &events_map, int *message_length) {
-	int index = 0;
-	move_to_buff(EVENTS, &index);
-
-	for (auto &element: events_map) {
-		int event_id = element.first;
-		event &eve = element.second;
-		int eve_size = eve.description_length + CONST_OCTETS;
-
-		if (index + eve_size > BUFFER_SIZE) {
-			break;
-		} else {
-			insert_event_to_buffer(eve, event_id, &index);
-		}
-	}
-	*message_length = index;
-}
-
-void fill_buffer_tickets(int reservation_id, const reservation &r, int *index) {
-	move_to_buff(TICKETS, index);
-	move_to_buff(reservation_id, index);
-	move_to_buff(r.ticket_count, index);
-	for (const string &ticket: r.tickets) {
-		move_to_buff(ticket, index);
-	}
-}
-
-bool check_tickets(int reservation_id, string &cookie, time_t current_time,
-                   reservationMap &reservations_map) {
-	if (reservations_map.find(reservation_id) == reservations_map.end())
-		return false;
-	reservation &r = reservations_map.at(reservation_id);
-	if (r.cookie != cookie)
-		return false;
-	if (!r.achieved && (r.expiration_time < current_time))
-		return false;
-	return true;
-}
-
-void send_tickets_or_bad(time_t current_time, reservationMap &reservations_map,
-                         int *message_length) {
-	int index = 1;
-	int reservation_id = parse_number_from_buffer(FOUR_OCT, &index);
-	string cookie = parse_cookie_from_buffer();
-	if (check_tickets(reservation_id, cookie, current_time, reservations_map)) {
-		reservation &r = reservations_map.at(reservation_id);
-		if (!r.achieved) {
-			r.achieved = true;
-			int count = r.ticket_count;
-			for (int i = 0; i < count; i++) {
-				r.tickets.emplace_back(generate_ticket());
-			}
-		}
-		fill_buffer_tickets(reservation_id, r, message_length);
-
-	} else {
-		insert_bad_request_to_buffer(reservation_id);
-		*message_length = BAD_REQUEST_MSG_LENGTH;
-	}
-}
-
-void parse_from_file(char *file_path, eventMap &events_map) {
-	FILE *fp = fopen(file_path, "r+");
-	int event_id = 0;
-	char description[MAX_DESCRIPTION_SIZE + 2];
-	char tickets_str[MAX_DESCRIPTION_SIZE + 2];
-
-	while (fgets(description, MAX_DESCRIPTION_SIZE + 2, fp)
-	       && fgets(tickets_str, MAX_DESCRIPTION_SIZE + 2, fp)) {
-
-		int description_length = (int) strlen(description) - 1;
-		string description_str = string(description, description_length);
-		event new_event = event(description_str, description_length,
-		                        strtoul(tickets_str,
-		                                nullptr, 10));
-		events_map.insert({event_id, new_event});
-		event_id++;
-	}
-
-	fclose(fp);
-}
-
-void remove_expired_reservations(eventMap &events_map,
-                                 reservationMap &reservations_map,
-                                 time_t &current_time) {
-	vector<int> reservations_to_remove;
-	for (const auto &element: reservations_map) {
-		int r_id = element.first;
-		reservation const &r = element.second;
-		if (!r.achieved && (r.expiration_time < current_time)) {
-			reservations_to_remove.push_back(r_id);
-		}
-	}
-	for (auto &r_id: reservations_to_remove) {
-		reservation &r = reservations_map.at(r_id);
-		events_map.at((int) r.event_id).tickets_available += r.ticket_count;
-		reservations_map.erase(r_id);
-	}
-}
-
-bool check_if_message_valid(size_t read_length) {
-	int message_id = (int) (unsigned char) shared_buffer[0];
-	if ((message_id == 1) && (read_length == GET_EVENTS_MSG_LENGTH))
-		return true;
-	if ((message_id == 3) && (read_length == GET_RESERVATION_MSG_LENGTH))
-		return true;
-	if ((message_id == 5) && (read_length == GET_TICKETS_MSG_LENGTH))
-		return true;
-	return false;
-}
-
-void execute_command_send_message(int socket_fd,
-                                  const struct sockaddr_in *client_address,
-                                  eventMap &events_map,
-                                  reservationMap &reservations_map,
-                                  time_t current_time, int timeout,
-                                  int *send_length) {
-
-	int message_id = (int) (unsigned char) shared_buffer[0];
-	*send_length = 0;
-	switch (message_id) {
-		case GET_EVENTS: {
-			send_events(events_map, send_length);
-			break;
-		}
-		case GET_RESERVATION: {
-			send_reservation_or_bad(current_time + timeout,
-			                        events_map, reservations_map, send_length);
-			break;
-		}
-		case GET_TICKETS: {
-			send_tickets_or_bad(current_time, reservations_map, send_length);
-			break;
-		}
-		default: {
-			printf("Message has an unexpected type.\n");
-		}
-	}
-	send_message(socket_fd, client_address, shared_buffer, *send_length);
-
-	int sent_message_id = (int) (unsigned char) shared_buffer[0];
-	if (sent_message_id != BAD_REQUEST) {
-		printf("Server followed the instructions from received message.\n");
-	} else {
-		printf("Server received the message with incorrect data.\n");
-	}
-	printf("Server sent message with message_id = %d.\n", sent_message_id);
-}
-
+private:
+  Data data;
+  Buffer buffer;
+  time_t time_after_read{time(nullptr)};
+  size_t read_length{0};
+  size_t sent_length{0};
+};
 
 int main(int argc, char *argv[]) {
-
-	int port = DEFAULT_PORT;
-	int timeout = DEFAULT_TIMEOUT;
-	int file_index;
-
-	check_parameters(argc, argv, &port, &timeout, &file_index);
-
-	char *file_path = argv[file_index];
-	eventMap events_map;
-	reservationMap reservations_map;
-
-	parse_from_file(file_path, events_map);
-
-	printf("Listening on port %u\n", port);
-
-	int socket_fd = bind_socket(port);
-
-	struct sockaddr_in client_address{};
-	char *ip = get_ip(&client_address);
-
-	size_t read_length;
-	bool is_valid;
-	int send_length;
-	time_t current_time;
-	memset(shared_buffer, 0, sizeof(shared_buffer)); // clean the buffer
-
-	do {
-		read_length = read_message(socket_fd, &client_address,
-		                           shared_buffer,
-		                           sizeof(shared_buffer));
-
-		printf("Received message from [%s:%d].\n", ip, port);
-
-		current_time = time(nullptr);
-		remove_expired_reservations(events_map, reservations_map, current_time);
-
-		is_valid = check_if_message_valid(read_length);
-		if (is_valid) {
-			execute_command_send_message(socket_fd, &client_address,
-			                             events_map, reservations_map,
-			                             current_time, timeout, &send_length);
-			memset(shared_buffer, 0, send_length);
-		} else {
-			printf("Received message does not have correct parameters.\n"
-			       "Server ignored the message\n");
-		}
-
-	} while (read_length > 0);
+  Data data = Data(argc, argv);
+  data.init();
+  Buffer shared_buffer = Buffer();
+  Server tcp_server = Server(data, shared_buffer);
+  tcp_server.run();
 }
