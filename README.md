@@ -89,5 +89,6 @@ Za to zadanie można otrzymać maksymalnie 10 punktów, w tym 6 punktów będzie
 
 ### Todo:
 - [x] Tests passed
-- [ ] Code refactor
+- [x] Code refactor
 - [X] Generate better cookies and tickets
+- [ ] Compilation with `-DNDEBUG` flag
