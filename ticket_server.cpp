@@ -73,6 +73,12 @@ static char ticket_charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     }                                                                          \
   } while (0)
 
+#ifdef DNDEBUG
+const bool debug = false;
+#else
+const bool debug = true;
+#endif
+
 struct event {
   string description;
   uint8_t description_length;
@@ -177,8 +183,9 @@ private:
       message = "WRONG PARAMETERS";
     }
     message.append("\n");
-    printf("Usage: %s -f <path to events file> [-p <port>] [-t <timeout>]\n",
-           bin_file);
+    fprintf(stderr,
+            "Usage: %s -f <path to events file> [-p <port>] [-t <timeout>]\n",
+            bin_file);
     fprintf(stderr, "%s", message.c_str());
     exit(1);
   }
@@ -191,15 +198,18 @@ private:
     file_path = path;
   }
 
-  int get_port(char *port_str) {
+  int check_port(char *port_str) {
     port = (int)strtoul(port_str, nullptr, 10);
-    if (port <= 0 || port > UINT16_MAX) {
+    if (port < 0 || port > UINT16_MAX ||
+        std::any_of(port_str, port_str + strlen(port_str),
+                    [](char c) { return !isdigit(c); })) {
+
       exit_program(WRONG_PORT);
     }
     return port;
   }
 
-  int get_timeout(char *timeout_str) {
+  int check_timeout(char *timeout_str) {
     timeout = (int)strtoul(timeout_str, nullptr, 10);
     if (timeout < 1 || timeout > 86400) {
       exit_program(WRONG_TIMEOUT);
@@ -222,10 +232,10 @@ private:
         check_file_path(optarg);
         break;
       case 'p':
-        port = get_port(optarg);
+        port = check_port(optarg);
         break;
       case 't':
-        timeout = get_timeout(optarg);
+        timeout = check_timeout(optarg);
         break;
       default:
         exit_program(NO_FILE_PATH);
@@ -488,7 +498,9 @@ public:
 
   virtual ~Server() {
     CHECK_ERRNO(close(socket_fd));
-    printf("Server closed\n");
+    if (debug) {
+      fprintf(stderr, "Server closed\n");
+    }
   }
 
 private:
@@ -527,7 +539,10 @@ private:
       PRINT_ERRNO();
     }
     time_after_read = time(nullptr);
-    printf("Received message from [%s:%d].\n", get_ip(), parameters.get_port());
+    if (debug) {
+      fprintf(stderr, "Received message from [%s:%d].\n", get_ip(),
+              parameters.get_port());
+    }
   }
 
   bool first_validate() {
@@ -539,19 +554,23 @@ private:
 
   void show_information() {
     uint8_t sent_message_id = buffer.get_message_id();
-    if (sent_message_id != BAD_REQUEST) {
-      printf("Server followed the instructions from received message.\n");
-    } else {
-      printf("Server received the message with incorrect data.\n");
+    if (debug) {
+      if (sent_message_id != BAD_REQUEST) {
+        fprintf(stderr,
+                "Server followed the instructions from received message.\n");
+      } else {
+        fprintf(stderr, "Server received the message with incorrect data.\n");
+      }
+      fprintf(stderr, "Server sent message with message_id = %d.\n",
+              sent_message_id);
     }
-    printf("Server sent message with message_id = %d.\n", sent_message_id);
   }
 
   void execute_command() {
     data.remove_expired_reservations(time_after_read);
-    if (!first_validate()) {
-      printf("Received message does not have correct parameters.\n"
-             "Server ignored the message\n");
+    if (debug && !first_validate()) {
+      fprintf(stderr, "Received message does not have correct parameters.\n"
+                      "Server ignored the message\n");
       return;
     }
 
@@ -570,14 +589,19 @@ private:
       break;
 
     default:
-      printf("Message has an unexpected type.\n");
+      if (debug) {
+        fprintf(stderr, "Message has an unexpected type.\n");
+      }
     }
   }
 
 public:
   void run() {
     bind_socket();
-    printf("Listening on port %u\n", parameters.get_port());
+    if (debug) {
+      fprintf(stderr, "Listening on port %u\n", parameters.get_port());
+    }
+
     while (true) {
       read_message();
       execute_command();
