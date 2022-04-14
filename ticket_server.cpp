@@ -16,11 +16,12 @@
 #include <utility>
 #include <vector>
 
+// Aliases for commonly used types
 using std::string;
-using std::vector;
 using eventMap = std::map<int, struct event>;
 using reservationMap = std::map<int, struct reservation>;
 
+// Global variables
 #define DEFAULT_PORT 2022
 #define DEFAULT_TIMEOUT 5
 
@@ -79,6 +80,7 @@ const bool debug = false;
 const bool debug = true;
 #endif
 
+// Structs used for server communication
 struct event {
   string description;
   uint8_t description_length;
@@ -97,7 +99,7 @@ struct reservation {
   time_t expiration_time;
   string cookie;
   bool achieved{false};
-  vector<string> tickets;
+  std::vector<string> tickets;
   inline static size_t ticket_current_id;
   inline static size_t reservation_current_id;
 
@@ -138,6 +140,7 @@ struct reservation {
   }
 };
 
+// Class containing given parameters to server
 class ServerParameters {
 private:
   enum WRONG_PARAMETERS {
@@ -257,6 +260,8 @@ private:
   char *bin_file;
   char *file_path{};
 };
+
+// Class for server data: events, reservations, etc.
 class Data {
 
 public:
@@ -288,7 +293,7 @@ private:
 
 public:
   void remove_expired_reservations(time_t &current_time) {
-    vector<int> reservations_to_remove;
+    std::vector<int> reservations_to_remove;
     for (const auto &element : reservations_map) {
       int r_id = element.first;
       reservation const &r = element.second;
@@ -329,6 +334,7 @@ private:
   reservationMap reservations_map;
 };
 
+// Class for operations on buffer, mostly converting data to proper format
 class Buffer {
 
 private:
@@ -416,6 +422,10 @@ private:
     insert(id);
   }
 
+  void reset_read_index() { read_index = 1; }
+
+  void reset_send_index() { send_index = 0; }
+
 public:
   void insert_events(Data &data) {
     reset_send_index();
@@ -477,10 +487,6 @@ public:
 
   [[nodiscard]] size_t get_size() const { return send_index; }
 
-  void reset_read_index() { read_index = 1; }
-
-  void reset_send_index() { send_index = 0; }
-
   char get_message_id() { return buffer[0]; }
 
   char *get() { return buffer; }
@@ -491,6 +497,7 @@ private:
   size_t read_index{1};
 };
 
+// Class implementing server operations: receiving, sending and processing
 class Server {
 public:
   Server(ServerParameters parameters, Data data, const Buffer &buffer)
