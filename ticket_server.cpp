@@ -422,6 +422,7 @@ private:
     insert(id);
   }
 
+  // we begin from 1, because we already know the value of buffer[0]- message_id
   void reset_read_index() { read_index = 1; }
 
   void reset_send_index() { send_index = 0; }
