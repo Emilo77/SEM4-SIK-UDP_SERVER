@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 using std::string;
 using std::vector;
@@ -138,15 +139,135 @@ struct reservation {
     return cookie;
   }
 };
-class Data {
+
+class ServerParameters {
+private:
+  static void exit_program(int status) {
+    string message;
+    switch (status) {
+    case WRONG_FLAGS:
+      message = "WRONG SERVER FLAGS";
+      break;
+    case WRONG_PATH:
+      message = "WRONG PATH TO FILE PARAMETER";
+      break;
+    case WRONG_PORT:
+      message = "WRONG PORT NUMBER PARAMETER";
+      break;
+    case WRONG_TIMEOUT:
+      message = "WRONG TIMEOUT PARAMETER";
+      break;
+    case WRONG_ARGS_NUMBER:
+      message = "WRONG ARGUMENTS NUMBER";
+      break;
+    default:
+      message = "WRONG PARAMETERS";
+    }
+    message.append("\n");
+    printf("Usage: {argv[0]} -f <path to events file> "
+           "[-p <port>] [-t <timeout>]\n");
+    fprintf(stderr, "%s", message.c_str());
+    exit(1);
+  }
+
+  void check_file_path(char *path) {
+    struct stat buffer {};
+    if (stat(path, &buffer) != 0) {
+      exit_program(WRONG_PATH);
+    }
+    file_path = path;
+  }
+
+  int get_port(char *port_str) {
+    port = (int)strtoul(port_str, nullptr, 10);
+    if (port <= 0 || port > UINT16_MAX) {
+      exit_program(WRONG_PORT);
+    }
+    return port;
+  }
+
+  int get_timeout(char *timeout_str) {
+    timeout = (int)strtoul(timeout_str, nullptr, 10);
+    if (timeout < 1 || timeout > 86400) {
+      exit_program(WRONG_TIMEOUT);
+    }
+    return timeout;
+  }
 
 public:
-  Data(int argc, char *argv[]) {
-    this->port = DEFAULT_PORT;
-    this->timeout = DEFAULT_TIMEOUT;
+  ServerParameters(int argc, char *argv[]) {
+    port = DEFAULT_PORT;
+    timeout = DEFAULT_TIMEOUT;
     check_parameters(argc, argv);
   }
 
+private:
+  void check_parameters(int argc, char *argv[]) {
+    if ((argc < 3 || argc > 7) || argc % 2 == 0)
+      exit_program(WRONG_ARGS_NUMBER);
+
+    bool flag_file_occurred = false;
+    for (int i = 1; i < argc; i += 2) {
+      if (strcmp(argv[i], "-f") == 0) {
+        flag_file_occurred = true;
+        check_file_path(argv[i + 1]);
+        file_path = argv[i + 1];
+
+      } else if (strcmp(argv[i], "-p") == 0) {
+        port = get_port(argv[i + 1]);
+
+      } else if (strcmp(argv[i], "-t") == 0) {
+        timeout = get_timeout(argv[i + 1]);
+
+      } else {
+        exit_program(WRONG_FLAGS);
+      }
+    }
+    if (!flag_file_occurred)
+      exit_program(WRONG_FLAGS);
+  }
+
+public:
+  [[nodiscard]] int get_port() const { return port; }
+
+  [[nodiscard]] char *get_file_path() const { return file_path; }
+
+  [[nodiscard]] int get_timeout() const { return timeout; }
+
+private:
+  int port;
+  int timeout;
+  char *file_path{};
+};
+class Data {
+
+public:
+  explicit Data(const ServerParameters &parameters) : parameters(parameters) {
+    parse_from_file();
+  }
+
+private:
+  void parse_from_file() {
+    FILE *fp = fopen(parameters.get_file_path(), "r+");
+    int event_id = 0;
+    char description[MAX_DESCRIPTION_SIZE + 2];
+    char tickets_str[MAX_DESCRIPTION_SIZE + 2];
+
+    while (fgets(description, MAX_DESCRIPTION_SIZE + 2, fp) &&
+           fgets(tickets_str, MAX_DESCRIPTION_SIZE + 2, fp)) {
+
+      int description_length = (int)strlen(description) - 1;
+      string description_str = string(description, description_length);
+      event new_event = event(description_str, description_length,
+                              strtoul(tickets_str, nullptr, 10));
+      events_map.insert({event_id, new_event});
+      event_id++;
+    }
+
+    fclose(fp);
+  }
+
+public:
   void remove_expired_reservations(const Data &data, time_t &current_time) {
     vector<int> reservations_to_remove;
     for (const auto &element : reservations_map) {
@@ -179,146 +300,12 @@ public:
              ((TICKET_OCTETS + ticket_count * TICKET_OCTETS) > BUFFER_SIZE));
   }
 
-private:
-  static void exit_program(int status) {
-    string message;
-    switch (status) {
-    case WRONG_FLAGS:
-      message = "WRONG SERVER FLAGS";
-      break;
-    case WRONG_PATH:
-      message = "WRONG PATH TO FILE PARAMETER";
-      break;
-    case WRONG_PORT:
-      message = "WRONG PORT NUMBER PARAMETER";
-      break;
-    case WRONG_TIMEOUT:
-      message = "WRONG TIMEOUT PARAMETER";
-      break;
-    case WRONG_ARGS_NUMBER:
-      message = "WRONG ARGUMENTS NUMBER";
-      break;
-    default:
-      message = "WRONG PARAMETERS";
-    }
-    message.append("\n");
-    printf("Usage: {argv[0]} -f <path to events file> "
-           "[-p <port>] [-t <timeout>]\n");
-    fprintf(stderr, "%s", message.c_str());
-    exit(1);
-  }
-
-  void bind_socket() {
-    socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    ENSURE(socket_fd > 0);
-
-    struct sockaddr_in server_address {};
-    server_address.sin_family = AF_INET; // IPv4
-    server_address.sin_addr.s_addr =
-        htonl(INADDR_ANY); // listening on all interfaces
-    server_address.sin_port = htons(port);
-
-    CHECK_ERRNO(bind(socket_fd, (struct sockaddr *)&server_address,
-                     (socklen_t)sizeof(server_address)));
-  }
-
-  void check_file_path(char *path) {
-    struct stat buffer {};
-    if (stat(path, &buffer) != 0) {
-      exit_program(WRONG_PATH);
-    }
-    file_path = path;
-  }
-
-  int get_port(char *port_str) {
-    port = (int)strtoul(port_str, nullptr, 10);
-    if (port <= 0 || port > UINT16_MAX) {
-      exit_program(WRONG_PORT);
-    }
-    return port;
-  }
-
-  int get_timeout(char *timeout_str) {
-    timeout = (int)strtoul(timeout_str, nullptr, 10);
-    if (timeout < 1 || timeout > 86400) {
-      exit_program(WRONG_TIMEOUT);
-    }
-    return timeout;
-  }
-
-  void parse_from_file() {
-    FILE *fp = fopen(file_path, "r+");
-    int event_id = 0;
-    char description[MAX_DESCRIPTION_SIZE + 2];
-    char tickets_str[MAX_DESCRIPTION_SIZE + 2];
-
-    while (fgets(description, MAX_DESCRIPTION_SIZE + 2, fp) &&
-           fgets(tickets_str, MAX_DESCRIPTION_SIZE + 2, fp)) {
-
-      int description_length = (int)strlen(description) - 1;
-      string description_str = string(description, description_length);
-      event new_event = event(description_str, description_length,
-                              strtoul(tickets_str, nullptr, 10));
-      events_map.insert({event_id, new_event});
-      event_id++;
-    }
-
-    fclose(fp);
-  }
-
-  void check_parameters(int argc, char *argv[]) {
-    if ((argc < 3 || argc > 7) || argc % 2 == 0)
-      exit_program(WRONG_ARGS_NUMBER);
-
-    bool flag_file_occurred = false;
-    for (int i = 1; i < argc; i += 2) {
-      if (strcmp(argv[i], "-f") == 0) {
-        flag_file_occurred = true;
-        check_file_path(argv[i + 1]);
-        file_path = argv[i + 1];
-
-      } else if (strcmp(argv[i], "-p") == 0) {
-        this->port = get_port(argv[i + 1]);
-
-      } else if (strcmp(argv[i], "-t") == 0) {
-        this->timeout = get_timeout(argv[i + 1]);
-
-      } else {
-        exit_program(WRONG_FLAGS);
-      }
-    }
-    if (!flag_file_occurred)
-      exit_program(WRONG_FLAGS);
-  }
-
-public:
-  void init() {
-    bind_socket();
-    parse_from_file();
-  }
-
-  [[nodiscard]] char *get_ip() const {
-    return inet_ntoa(this->client_address.sin_addr);
-  }
-
-  [[nodiscard]] int get_socket() const { return socket_fd; }
-
-  [[nodiscard]] int get_port() const { return port; }
-
-  [[nodiscard]] int get_timeout() const { return timeout; }
-
   [[nodiscard]] eventMap &get_events_map() { return events_map; }
 
   reservationMap &getReservationsMap() { return reservations_map; }
 
-  sockaddr_in *get_client_address() { return &client_address; } // może źle
-
 private:
-  int port;
-  int timeout;
-  int socket_fd{};
-  char *file_path{};
-  struct sockaddr_in client_address {};
+  ServerParameters parameters;
   eventMap events_map;
   reservationMap reservations_map;
 };
@@ -326,6 +313,22 @@ private:
 class Buffer {
 
 private:
+  int parse_number(int size, int *index) {
+    int arr[size];
+    int result = 0;
+
+    for (int i = 0; i < size; i++) {
+      arr[size - 1 - i] = (int)(unsigned char)buffer[*index + i];
+    }
+    for (int i = 0; i < size; i++) {
+      result += arr[i] * (int)pow(COUNTING_BASE, i);
+    }
+    *index += size;
+    return result;
+  }
+
+  string parse_cookie() { return {buffer + COOKIE_POS, COOKIE_SIZE}; }
+
   template <typename T> void move_to_buff(vector<T> vec) {
     size_t size = vec.size();
     for (int i = 0; i < size; i++) {
@@ -352,7 +355,6 @@ private:
     current_size += length;
   }
 
-public:
   void insert_single_event(const event &e, int event_id) {
     move_to_buff(event_id);
     move_to_buff(e.tickets_available);
@@ -389,6 +391,7 @@ public:
     move_to_buff(id);
   }
 
+public:
   void insert_events(Data &data) {
     set_size_to_zero();
 
@@ -406,21 +409,7 @@ public:
     }
   }
 
-  int parse_number(int size, int *index) {
-    int arr[size];
-    int result = 0;
-
-    for (int i = 0; i < size; i++) {
-      arr[size - 1 - i] = (int)(unsigned char)buffer[*index + i];
-    }
-    for (int i = 0; i < size; i++) {
-      result += arr[i] * (int)pow(COUNTING_BASE, i);
-    }
-    *index += size;
-    return result;
-  }
-
-  void try_inserting_reservation(Data &data, time_t time) {
+  void try_inserting_reservation(Data &data, time_t time, int timeout) {
     int index = 1;
     int event_id = parse_number(FOUR_OCT, &index);
     int ticket_count = parse_number(TWO_OCT, &index);
@@ -428,7 +417,7 @@ public:
 
       int reservation_id = new_reservation_id();
       reservation new_reservation =
-          reservation(event_id, ticket_count, time + data.get_timeout());
+          reservation(event_id, ticket_count, time + timeout);
       data.getReservationsMap().insert({reservation_id, new_reservation});
       data.get_events_map().at(event_id).tickets_available -= ticket_count;
       insert_reservation(reservation_id, new_reservation);
@@ -459,8 +448,6 @@ public:
     }
   }
 
-  string parse_cookie() { return {buffer + COOKIE_POS, COOKIE_SIZE}; }
-
   [[nodiscard]] size_t get_size() const { return current_size; }
 
   void set_size_to_zero() { current_size = 0; }
@@ -478,31 +465,50 @@ private:
 
 class Server {
 public:
-  Server(Data data, const Buffer &buffer)
-      : data(std::move(data)), buffer(buffer) {}
+  Server(ServerParameters parameters, Data data, const Buffer &buffer)
+      : parameters(parameters), data(std::move(data)), buffer(buffer) {}
+
+  virtual ~Server() {
+    close(socket_fd);
+  }
 
 private:
+  [[nodiscard]] char *get_ip() const {
+    return inet_ntoa(client_address.sin_addr);
+  }
+
+  void bind_socket() {
+    socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    ENSURE(socket_fd > 0);
+
+    struct sockaddr_in server_address {};
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_address.sin_port = htons(parameters.get_port());
+
+    CHECK_ERRNO(bind(socket_fd, (struct sockaddr *)&server_address,
+                     (socklen_t)sizeof(server_address)));
+  }
+
   void send_message() {
-    auto address_length = (socklen_t)sizeof(*data.get_client_address());
+    auto address_length = (socklen_t)sizeof(client_address);
     int flags = 0;
-    sent_length =
-        sendto(data.get_socket(), buffer.get(), buffer.get_size(), flags,
-               (struct sockaddr *)data.get_client_address(), address_length);
+    sent_length = sendto(socket_fd, buffer.get(), buffer.get_size(), flags,
+                         (struct sockaddr *)&client_address, address_length);
     ENSURE(sent_length == (ssize_t)buffer.get_size());
   }
 
   void read_message() {
-    auto address_length = (socklen_t)sizeof(*data.get_client_address());
+    auto address_length = (socklen_t)sizeof(client_address);
     int flags = 0;
     errno = 0;
-    read_length =
-        recvfrom(data.get_socket(), buffer.get(), BUFFER_SIZE, flags,
-                 (struct sockaddr *)data.get_client_address(), &address_length);
+    read_length = recvfrom(socket_fd, buffer.get(), BUFFER_SIZE, flags,
+                           (struct sockaddr *)&client_address, &address_length);
     if (read_length < 0) {
       PRINT_ERRNO();
     }
     time_after_read = time(nullptr);
-    printf("Received message from [%s:%d].\n", data.get_ip(), data.get_port());
+    printf("Received message from [%s:%d].\n", get_ip(), parameters.get_port());
   }
 
   bool first_validate() {
@@ -536,7 +542,8 @@ private:
       break;
 
     case GET_RESERVATION:
-      buffer.try_inserting_reservation(data, time_after_read);
+      buffer.try_inserting_reservation(data, time_after_read,
+                                       parameters.get_timeout());
       break;
 
     case GET_TICKETS:
@@ -546,12 +553,14 @@ private:
     default:
       printf("Message has an unexpected type.\n");
     }
-
   }
+
+  sockaddr_in *get_client_address() { return &client_address; }
 
 public:
   void run() {
-    printf("Listening on port %u\n", data.get_port());
+    bind_socket();
+    printf("Listening on port %u\n", parameters.get_port());
     while (true) {
       read_message();
       execute_command();
@@ -561,17 +570,20 @@ public:
   }
 
 private:
+  ServerParameters parameters;
   Data data;
   Buffer buffer;
   time_t time_after_read{time(nullptr)};
   size_t read_length{0};
   size_t sent_length{0};
+  int socket_fd{};
+  struct sockaddr_in client_address {};
 };
 
 int main(int argc, char *argv[]) {
-  Data data = Data(argc, argv);
-  data.init();
+  ServerParameters parameters = ServerParameters(argc, argv);
+  Data data = Data(parameters);
   Buffer shared_buffer = Buffer();
-  Server tcp_server = Server(data, shared_buffer);
+  Server tcp_server = Server(parameters, data, shared_buffer);
   tcp_server.run();
 }
