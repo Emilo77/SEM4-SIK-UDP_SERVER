@@ -12,20 +12,14 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include <utility>
 #include <vector>
-#include <unistd.h>
 
 using std::string;
 using std::vector;
 using eventMap = std::map<int, struct event>;
 using reservationMap = std::map<int, struct reservation>;
-
-#define WRONG_FLAGS 1
-#define WRONG_PATH 2
-#define WRONG_PORT 3
-#define WRONG_TIMEOUT 4
-#define WRONG_ARGS_NUMBER 5
 
 #define DEFAULT_PORT 2022
 #define DEFAULT_TIMEOUT 5
@@ -38,9 +32,6 @@ using reservationMap = std::map<int, struct reservation>;
 #define TICKETS (uint8_t)6
 #define BAD_REQUEST (uint8_t)255
 
-#define TWO_OCT 2
-#define FOUR_OCT 4
-
 #define MIN_COOKIE_CHAR 33
 #define MAX_COOKIE_CHAR 126
 
@@ -49,18 +40,13 @@ using reservationMap = std::map<int, struct reservation>;
 #define TICKET_OCTETS 7
 #define MAX_DESCRIPTION_SIZE 80
 #define COOKIE_SIZE 48
-#define COUNTING_BASE 256
 
 #define GET_EVENTS_MSG_LENGTH 1
 #define GET_RESERVATION_MSG_LENGTH 7
 #define GET_TICKETS_MSG_LENGTH 53
 
-#define BAD_REQUEST_MSG_LENGTH 5
-
 #define BUFFER_SIZE 65507
 static char ticket_charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-int ticket_current_id = 0;
-int reservation_current_id = 0;
 
 #define PRINT_ERRNO()                                                          \
   do {                                                                         \
@@ -88,10 +74,6 @@ int reservation_current_id = 0;
     }                                                                          \
   } while (0)
 
-int new_reservation_id() { return reservation_current_id++; }
-
-int new_ticket_id() { return ticket_current_id++; }
-
 struct event {
   string description;
   uint8_t description_length;
@@ -111,13 +93,24 @@ struct reservation {
   string cookie;
   bool achieved{false};
   vector<string> tickets;
+  inline static size_t ticket_current_id;
+  inline static size_t reservation_current_id;
 
   reservation(uint32_t eventId, uint16_t ticketCount, time_t expirationTime)
       : event_id(eventId), ticket_count(ticketCount),
         expiration_time(expirationTime), cookie(std::move(generate_cookie())) {}
 
+  static void initialize_ids() {
+    reservation::ticket_current_id = 0;
+    reservation::reservation_current_id = 1000000;
+  }
+
+  static size_t new_reservation_id() { return reservation_current_id++; }
+
+  static size_t new_ticket_id() { return ticket_current_id++; }
+
   void generate_ticket() {
-    int ticket_id = new_ticket_id();
+    size_t ticket_id = new_ticket_id();
     string ticket(TICKET_OCTETS, 'A');
     size_t charset_size = strlen(ticket_charset);
 
@@ -142,6 +135,14 @@ struct reservation {
 
 class ServerParameters {
 private:
+  enum WRONG_PARAMETERS {
+    WRONG_FLAGS = 1,
+    WRONG_PATH = 2,
+    WRONG_PORT = 3,
+    WRONG_TIMEOUT = 4,
+    WRONG_ARGS_NUMBER = 5,
+  };
+
   static void exit_program(int status) {
     string message;
     switch (status) {
@@ -243,6 +244,7 @@ class Data {
 
 public:
   explicit Data(const ServerParameters &parameters) : parameters(parameters) {
+    reservation::initialize_ids();
     parse_from_file();
   }
 
@@ -268,7 +270,7 @@ private:
   }
 
 public:
-  void remove_expired_reservations(const Data &data, time_t &current_time) {
+  void remove_expired_reservations(time_t &current_time) {
     vector<int> reservations_to_remove;
     for (const auto &element : reservations_map) {
       int r_id = element.first;
@@ -313,95 +315,104 @@ private:
 class Buffer {
 
 private:
-  int parse_number(int size, int *index) {
-    int arr[size];
-    int result = 0;
-
-    for (int i = 0; i < size; i++) {
-      arr[size - 1 - i] = (int)(unsigned char)buffer[*index + i];
+  template <typename T> T convert_to_send(T number) {
+    switch (sizeof(T)) {
+    case 1:
+      return number;
+    case 2:
+      return htobe16(number);
+    case 4:
+      return htobe32(number);
+    default:
+      return htobe64(number);
     }
-    for (int i = 0; i < size; i++) {
-      result += arr[i] * (int)pow(COUNTING_BASE, i);
-    }
-    *index += size;
-    return result;
   }
 
-  string parse_cookie() { return {buffer + COOKIE_POS, COOKIE_SIZE}; }
-
-  template <typename T> void move_to_buff(vector<T> vec) {
-    size_t size = vec.size();
-    for (int i = 0; i < size; i++) {
-      buffer[current_size + i] = (char)vec[i];
+  template <typename T> T convert_to_receive(T number) {
+    switch (sizeof(T)) {
+    case 1:
+      return number;
+    case 2:
+      return be16toh(number);
+    case 4:
+      return be32toh(number);
+    default:
+      return be64toh(number);
     }
-    set_current_size(current_size + size);
   }
 
-  template <typename T> void move_to_buff(T number) {
-    int octet_size = sizeof(T);
-    vector<size_t> result(octet_size, 0);
-    for (int i = octet_size - 1; i >= 0; i--) {
-      result[i] = number % COUNTING_BASE;
-      number = number >> 8;
-    }
-    move_to_buff(result);
+  template <typename T> void insert(T number) {
+    int size = sizeof(T);
+    number = convert_to_send(number);
+    memcpy(buffer + send_index, &number, size);
+    send_index += size;
   }
 
-  void move_to_buff(string s) {
-    size_t length = s.length();
-    for (int i = 0; i < length; i++) {
-      buffer[current_size + i] = s[i];
-    }
-    current_size += length;
+  void insert(const string &str) {
+    size_t size = str.size();
+    memcpy(buffer + send_index, str.c_str(), size);
+    send_index += size;
+  }
+
+  template <typename T> void receive_number(T &number) {
+    int size = sizeof(T);
+    memcpy(&number, buffer + read_index, size);
+    read_index += size;
+    number = convert_to_receive(number);
+  }
+
+  string receive_cookie() {
+    read_index += COOKIE_POS;
+    return {buffer + COOKIE_POS, COOKIE_SIZE};
   }
 
   void insert_single_event(const event &e, int event_id) {
-    move_to_buff(event_id);
-    move_to_buff(e.tickets_available);
-    move_to_buff(e.description_length);
-    move_to_buff(e.description);
+    insert(event_id);
+    insert(e.tickets_available);
+    insert(e.description_length);
+    insert(e.description);
   }
 
   void insert_tickets(int reservation_id, const reservation &r) {
-    set_size_to_zero();
+    reset_send_index();
 
-    move_to_buff(TICKETS);
-    move_to_buff(reservation_id);
-    move_to_buff(r.ticket_count);
+    insert(TICKETS);
+    insert(reservation_id);
+    insert(r.ticket_count);
     for (const string &ticket : r.tickets) {
-      move_to_buff(ticket);
+      insert(ticket);
     }
   }
 
   void insert_reservation(int reservation_id, reservation &r) {
-    set_size_to_zero();
+    reset_send_index();
 
-    move_to_buff(RESERVATION);
-    move_to_buff(reservation_id);
-    move_to_buff(r.event_id);
-    move_to_buff(r.ticket_count);
-    move_to_buff(r.cookie);
-    move_to_buff(r.expiration_time);
+    insert(RESERVATION);
+    insert(reservation_id);
+    insert(r.event_id);
+    insert(r.ticket_count);
+    insert(r.cookie);
+    insert(r.expiration_time);
   }
 
   void insert_bad_request(int id) {
-    set_size_to_zero();
+    reset_send_index();
 
-    move_to_buff(BAD_REQUEST);
-    move_to_buff(id);
+    insert(BAD_REQUEST);
+    insert(id);
   }
 
 public:
   void insert_events(Data &data) {
-    set_size_to_zero();
+    reset_send_index();
 
-    move_to_buff(EVENTS);
+    insert(EVENTS);
     for (auto &element : data.get_events_map()) {
       int event_id = element.first;
       event const &eve = element.second;
       int eve_size = eve.description_length + CONST_OCTETS;
 
-      if (current_size + eve_size > BUFFER_SIZE) {
+      if (send_index + eve_size > BUFFER_SIZE) {
         break;
       } else {
         insert_single_event(eve, event_id);
@@ -410,28 +421,31 @@ public:
   }
 
   void try_inserting_reservation(Data &data, time_t time, int timeout) {
-    int index = 1;
-    int event_id = parse_number(FOUR_OCT, &index);
-    int ticket_count = parse_number(TWO_OCT, &index);
-    if (data.validate_reservation(event_id, ticket_count)) {
+    read_index = 1;
+    uint32_t event_id;
+    uint16_t ticket_count;
+    receive_number(event_id);
+    receive_number(ticket_count);
+    if (data.validate_reservation((int)event_id, ticket_count)) {
 
-      int reservation_id = new_reservation_id();
+      int reservation_id = (int)reservation::new_reservation_id();
       reservation new_reservation =
           reservation(event_id, ticket_count, time + timeout);
       data.getReservationsMap().insert({reservation_id, new_reservation});
-      data.get_events_map().at(event_id).tickets_available -= ticket_count;
+      data.get_events_map().at((int)event_id).tickets_available -= ticket_count;
       insert_reservation(reservation_id, new_reservation);
 
     } else {
-      insert_bad_request(event_id);
-      set_current_size(BAD_REQUEST_MSG_LENGTH); // check
+      insert_bad_request((int)event_id);
     }
   }
 
   void try_inserting_tickets(Data &data, time_t time) {
-    int index = 1;
-    int reservation_id = parse_number(FOUR_OCT, &index);
-    string cookie = parse_cookie();
+    reset_read_index();
+
+    int reservation_id;
+    receive_number(reservation_id);
+    string cookie = receive_cookie();
     if (data.validate_tickets(reservation_id, cookie, time)) {
       reservation &r = data.getReservationsMap().at(reservation_id);
       if (!r.achieved) {
@@ -444,15 +458,14 @@ public:
 
     } else {
       insert_bad_request(reservation_id);
-      set_current_size(BAD_REQUEST_MSG_LENGTH); // check
     }
   }
 
-  [[nodiscard]] size_t get_size() const { return current_size; }
+  [[nodiscard]] size_t get_size() const { return send_index; }
 
-  void set_size_to_zero() { current_size = 0; }
+  void reset_read_index() { read_index = 1; }
 
-  void set_current_size(size_t number) { current_size = number; }
+  void reset_send_index() { send_index = 0; }
 
   char get_message_id() { return buffer[0]; }
 
@@ -460,7 +473,8 @@ public:
 
 private:
   char buffer[BUFFER_SIZE]{};
-  size_t current_size{0};
+  size_t send_index{0};
+  size_t read_index{1};
 };
 
 class Server {
@@ -468,9 +482,7 @@ public:
   Server(ServerParameters parameters, Data data, const Buffer &buffer)
       : parameters(parameters), data(std::move(data)), buffer(buffer) {}
 
-  virtual ~Server() {
-    close(socket_fd);
-  }
+  virtual ~Server() { CHECK_ERRNO(close(socket_fd)); }
 
 private:
   [[nodiscard]] char *get_ip() const {
@@ -529,7 +541,7 @@ private:
   }
 
   void execute_command() {
-    data.remove_expired_reservations(data, time_after_read);
+    data.remove_expired_reservations(time_after_read);
     if (!first_validate()) {
       printf("Received message does not have correct parameters.\n"
              "Server ignored the message\n");
@@ -555,8 +567,6 @@ private:
     }
   }
 
-  sockaddr_in *get_client_address() { return &client_address; }
-
 public:
   void run() {
     bind_socket();
@@ -574,8 +584,8 @@ private:
   Data data;
   Buffer buffer;
   time_t time_after_read{time(nullptr)};
-  size_t read_length{0};
-  size_t sent_length{0};
+  ssize_t read_length{0};
+  ssize_t sent_length{0};
   int socket_fd{};
   struct sockaddr_in client_address {};
 };
