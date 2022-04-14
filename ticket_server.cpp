@@ -35,11 +35,10 @@ using reservationMap = std::map<int, struct reservation>;
 #define MIN_COOKIE_CHAR 33
 #define MAX_COOKIE_CHAR 126
 
-#define COOKIE_POS 5
-#define CONST_OCTETS 7
+#define EVENT_CONST_OCTETS 7
 #define TICKET_OCTETS 7
-#define MAX_DESCRIPTION_SIZE 80
 #define COOKIE_SIZE 48
+#define MAX_DESCRIPTION_SIZE 80
 
 #define GET_EVENTS_MSG_LENGTH 1
 #define GET_RESERVATION_MSG_LENGTH 7
@@ -141,9 +140,19 @@ private:
     WRONG_PORT = 3,
     WRONG_TIMEOUT = 4,
     WRONG_ARGS_NUMBER = 5,
+    NO_FILE_PATH = 6,
   };
 
-  static void exit_program(int status) {
+public:
+  ServerParameters(int argc, char *argv[]) {
+    port = DEFAULT_PORT;
+    timeout = DEFAULT_TIMEOUT;
+    bin_file = argv[0];
+    check_parameters(argc, argv);
+  }
+
+private:
+  void exit_program(int status) {
     string message;
     switch (status) {
     case WRONG_FLAGS:
@@ -161,12 +170,15 @@ private:
     case WRONG_ARGS_NUMBER:
       message = "WRONG ARGUMENTS NUMBER";
       break;
+    case NO_FILE_PATH:
+      message = "FILEPATH NOT FOUND";
+      break;
     default:
       message = "WRONG PARAMETERS";
     }
     message.append("\n");
-    printf("Usage: {argv[0]} -f <path to events file> "
-           "[-p <port>] [-t <timeout>]\n");
+    printf("Usage: %s -f <path to events file> [-p <port>] [-t <timeout>]\n",
+           bin_file);
     fprintf(stderr, "%s", message.c_str());
     exit(1);
   }
@@ -195,35 +207,29 @@ private:
     return timeout;
   }
 
-public:
-  ServerParameters(int argc, char *argv[]) {
-    port = DEFAULT_PORT;
-    timeout = DEFAULT_TIMEOUT;
-    check_parameters(argc, argv);
-  }
-
-private:
   void check_parameters(int argc, char *argv[]) {
     if ((argc < 3 || argc > 7) || argc % 2 == 0)
       exit_program(WRONG_ARGS_NUMBER);
 
     bool flag_file_occurred = false;
-    for (int i = 1; i < argc; i += 2) {
-      if (strcmp(argv[i], "-f") == 0) {
+
+    const char *flags = "-f:p:t:";
+    int opt;
+    while ((opt = getopt(argc, argv, flags)) != -1)
+      switch (opt) {
+      case 'f':
         flag_file_occurred = true;
-        check_file_path(argv[i + 1]);
-        file_path = argv[i + 1];
-
-      } else if (strcmp(argv[i], "-p") == 0) {
-        port = get_port(argv[i + 1]);
-
-      } else if (strcmp(argv[i], "-t") == 0) {
-        timeout = get_timeout(argv[i + 1]);
-
-      } else {
-        exit_program(WRONG_FLAGS);
+        check_file_path(optarg);
+        break;
+      case 'p':
+        port = get_port(optarg);
+        break;
+      case 't':
+        timeout = get_timeout(optarg);
+        break;
+      default:
+        exit_program(NO_FILE_PATH);
       }
-    }
     if (!flag_file_occurred)
       exit_program(WRONG_FLAGS);
   }
@@ -238,6 +244,7 @@ public:
 private:
   int port;
   int timeout;
+  char *bin_file;
   char *file_path{};
 };
 class Data {
@@ -361,10 +368,7 @@ private:
     number = convert_to_receive(number);
   }
 
-  string receive_cookie() {
-    read_index += COOKIE_POS;
-    return {buffer + COOKIE_POS, COOKIE_SIZE};
-  }
+  string receive_cookie() { return {buffer + read_index, COOKIE_SIZE}; }
 
   void insert_single_event(const event &e, int event_id) {
     insert(event_id);
@@ -410,7 +414,7 @@ public:
     for (auto &element : data.get_events_map()) {
       int event_id = element.first;
       event const &eve = element.second;
-      int eve_size = eve.description_length + CONST_OCTETS;
+      int eve_size = eve.description_length + EVENT_CONST_OCTETS;
 
       if (send_index + eve_size > BUFFER_SIZE) {
         break;
@@ -420,7 +424,7 @@ public:
     }
   }
 
-  void try_inserting_reservation(Data &data, time_t time, int timeout) {
+  void try_to_insert_reservation(Data &data, time_t time, int timeout) {
     read_index = 1;
     uint32_t event_id;
     uint16_t ticket_count;
@@ -440,7 +444,7 @@ public:
     }
   }
 
-  void try_inserting_tickets(Data &data, time_t time) {
+  void try_to_insert_tickets(Data &data, time_t time) {
     reset_read_index();
 
     int reservation_id;
@@ -482,7 +486,10 @@ public:
   Server(ServerParameters parameters, Data data, const Buffer &buffer)
       : parameters(parameters), data(std::move(data)), buffer(buffer) {}
 
-  virtual ~Server() { CHECK_ERRNO(close(socket_fd)); }
+  virtual ~Server() {
+    CHECK_ERRNO(close(socket_fd));
+    printf("Server closed\n");
+  }
 
 private:
   [[nodiscard]] char *get_ip() const {
@@ -554,12 +561,12 @@ private:
       break;
 
     case GET_RESERVATION:
-      buffer.try_inserting_reservation(data, time_after_read,
+      buffer.try_to_insert_reservation(data, time_after_read,
                                        parameters.get_timeout());
       break;
 
     case GET_TICKETS:
-      buffer.try_inserting_tickets(data, time_after_read);
+      buffer.try_to_insert_tickets(data, time_after_read);
       break;
 
     default:
