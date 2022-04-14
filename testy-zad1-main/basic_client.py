@@ -41,6 +41,7 @@ class Client:
         if message_type == 255:
             assert struct.unpack('!I', data[1:])[0] == event_id
             raise Response255Exception(event_id)
+
         assert len(data) == 1 + 4 + 4 + 2 + 48 + 8
 
         class ReservationInfo(Printable): pass

@@ -74,7 +74,7 @@ static char ticket_charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     }                                                                          \
   } while (0)
 
-#ifdef DNDEBUG
+#ifdef NDEBUG
 const bool debug = false;
 #else
 const bool debug = true;
