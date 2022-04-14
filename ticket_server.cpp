@@ -632,6 +632,6 @@ int main(int argc, char *argv[]) {
   ServerParameters parameters = ServerParameters(argc, argv);
   Data data = Data(parameters);
   Buffer shared_buffer = Buffer();
-  Server tcp_server = Server(parameters, data, shared_buffer);
-  tcp_server.run();
+  Server udp_server = Server(parameters, data, shared_buffer);
+  udp_server.run();
 }
