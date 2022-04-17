@@ -91,4 +91,4 @@ Za to zadanie można otrzymać maksymalnie 10 punktów, w tym 6 punktów będzie
 - [x] Tests passed
 - [x] Code refactor
 - [X] Generate better cookies and tickets
-- [ ] Compilation with `-DNDEBUG` flag
+- [x] Compilation with `-DNDEBUG` flag
