@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://media.giphy.com/media/8GjxwxtZWS29xlJnUH/giphy.gif" width=45%">
+</p>
+
 # Sieciowa rezerwacja biletów
 
 Zaimplementuj serwer UDP obsługujący sieciową rezerwację biletów na wydarzenia. Serwer ma być jednowątkowy i powinien obsługiwać klientów symultanicznie.
