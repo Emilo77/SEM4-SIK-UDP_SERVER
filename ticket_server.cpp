@@ -272,7 +272,7 @@ public:
 
 private:
   void parse_from_file() {
-    FILE *fp = fopen(parameters.get_file_path(), "r+");
+    FILE *fp = fopen(parameters.get_file_path(), "r");
     int event_id = 0;
     char description[MAX_DESCRIPTION_SIZE + 2];
     char tickets_str[MAX_DESCRIPTION_SIZE + 2];
